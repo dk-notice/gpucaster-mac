@@ -67,6 +67,7 @@ struct Uniforms {
     f4 ws_camera_y_axis;
     f4 ws_camera_z_axis;
     f4 g_image_size;                     // .xy = w, h; .zw = 1/w, 1/h
+    f4 g_tile_info;                      // .xy = tile width, height in pixels; .zw = tiles across, down
 
     // Values the user can adjust without recompiling (g_c0 .. g_c9)
     f4 g_dialog_coeffs[MAX_VECTOR_COEFFS];
@@ -117,7 +118,11 @@ struct Uniforms {
     float kSurfaceColorAmount;
 
     float kFinalGamma;
-    float pad0, pad1, pad2;
+    // How many tiles of the ambient occlusion pass in progress are done
+    // (a huge number when no pass is part-way through).
+    u32   g_main_ambo_tiles_done;
+    u32   g_refl_ambo_tiles_done;
+    float pad0;
 };
 
 // Everything that changes for each tile drawn.

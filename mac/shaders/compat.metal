@@ -40,6 +40,9 @@
 #define ws_camera_y_axis    u.ws_camera_y_axis.xyz
 #define ws_camera_z_axis    u.ws_camera_z_axis.xyz
 #define g_image_size        u.g_image_size
+#define g_tile_info         u.g_tile_info
+#define g_main_ambo_tiles_done u.g_main_ambo_tiles_done
+#define g_refl_ambo_tiles_done u.g_refl_ambo_tiles_done
 
 #define g_dialog_coeffs u.g_dialog_coeffs
 #define g_c0 g_dialog_coeffs[0]

@@ -93,6 +93,11 @@ float4 RelightPS(float2 uv) {
 
     bool apply_final_brightness_and_sat = true;
 
+    // Which tile this pixel is in.  While an ambient occlusion pass is part-way
+    // through, tiles it hasn't reached yet have one pass fewer than the rest.
+    const float2 px = uv * g_image_size.xy;
+    const uint tile_index = uint(floor(px.y / g_tile_info.y)) * uint(g_tile_info.z) + uint(floor(px.x / g_tile_info.x));
+
     // p==0: 2nd ray intersection pt (...where the reflection ray landed).
     // p==1: primary ray intersection pt (...where the primary ray landed).
     for (int p=0; p<2; p++)
@@ -107,12 +112,14 @@ float4 RelightPS(float2 uv) {
             orig_norm  = orig_refl_norm ;
             orig_ambo  = orig_refl_ambo ;
             ambo_pass  = int(g_refl_ambo_pass);
+            if (tile_index >= g_refl_ambo_tiles_done) ambo_pass -= 1;
         } else {
             // Main ray.
             orig_depth = orig_main_depth;
             orig_norm  = orig_main_norm ;
             orig_ambo  = orig_main_ambo ;
             ambo_pass  = int(g_main_ambo_pass);
+            if (tile_index >= g_main_ambo_tiles_done) ambo_pass -= 1;
         }
 
         const float3 surface_normal = normalize(orig_norm.xyz);

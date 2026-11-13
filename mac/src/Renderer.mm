@@ -72,6 +72,7 @@ struct IntersectionSet {
     IntersectionSet *_cur;
     int _width, _height;
     BOOL _relightWhole;
+    BOOL _displayDirty;            // the window needs the picture copied to it again
     BOOL _autoActive;
     BOOL _reloadPending;
     double _tilesPerFrame;
@@ -474,6 +475,7 @@ struct IntersectionSet {
     [self initSet:&_main];
     _refl = IntersectionSet();   // made again when reflections are next used
     _final = [self makeTarget:MTLPixelFormatBGRA8Unorm shared:YES];
+    _displayDirty = YES;
     [self clearAll];
 }
 
@@ -617,12 +619,25 @@ struct IntersectionSet {
 - (int)tilesAcross { return MAX(1, _width / kTileEdge); }
 - (int)tilesDown { return MAX(1, _height / kTileEdge); }
 
+// Tiles are a fixed size (the last column and row may be narrower), so the
+// relight shader can work out which tile a pixel belongs to.
+- (int)tileWidth { int across = [self tilesAcross]; return (_width + across - 1) / across; }
+- (int)tileHeight { int down = [self tilesDown]; return (_height + down - 1) / down; }
+
 - (MTLScissorRect)rectForTile:(int)t {
     int across = [self tilesAcross], down = [self tilesDown];
+    int tw = [self tileWidth], th = [self tileHeight];
     int tx = t % across, ty = (t / across) % down;
-    NSUInteger x0 = (NSUInteger)tx * _width / across, x1 = (NSUInteger)(tx + 1) * _width / across;
-    NSUInteger y0 = (NSUInteger)ty * _height / down, y1 = (NSUInteger)(ty + 1) * _height / down;
-    return (MTLScissorRect){x0, y0, x1 - x0, y1 - y0};
+    int x0 = MIN(tx * tw, _width - 1), y0 = MIN(ty * th, _height - 1);
+    int x1 = MIN(x0 + tw, _width), y1 = MIN(y0 + th, _height);
+    return (MTLScissorRect){(NSUInteger)x0, (NSUInteger)y0, (NSUInteger)(x1 - x0), (NSUInteger)(y1 - y0)};
+}
+
+// For the relight shader: how many tiles of this set's ambient occlusion pass
+// are done, or a huge number if no pass is part-way through.
+- (uint32_t)amboTilesDone:(IntersectionSet *)s extra:(int)justDrawn {
+    int progress = s->tile + justDrawn;
+    return (s->gen == GenAmbo && progress > 0) ? (uint32_t)progress : 0xFFFFFFFFu;
 }
 
 - (void)clearTexture:(id<MTLTexture>)tex in:(id<MTLCommandBuffer>)cb {
@@ -759,6 +774,10 @@ struct IntersectionSet {
     u.g_refl_ambo_pass = (uint32_t)_refl.ambo_pass;
     u.g_intersection_set = (s == &_main) ? 0 : 1;
     u.g_geom_frames_since_geom_clear = (uint32_t)s->geom_passes;
+    u.g_tile_info = simd_make_float4((float)[self tileWidth], (float)[self tileHeight],
+                                     (float)[self tilesAcross], (float)[self tilesDown]);
+    u.g_main_ambo_tiles_done = [self amboTilesDone:&_main extra:(s == &_main ? n : 0)];
+    u.g_refl_ambo_tiles_done = [self amboTilesDone:&_refl extra:(s == &_refl ? n : 0)];
     id<MTLBuffer> ubuf = [_device newBufferWithBytes:&u length:sizeof(u) options:MTLResourceStorageModeShared];
 
     // Fresh random numbers for every tile.
@@ -829,11 +848,20 @@ struct IntersectionSet {
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
     [self setImageWidth:(int)size.width height:(int)size.height];
+    _displayDirty = YES;
+}
+
+- (BOOL)hasPendingWork {
+    return _relightWhole || _cur->gen != GenNone || _cur->next != GenNone || _main.clear_flags || _refl.clear_flags;
 }
 
 - (void)drawInMTKView:(MTKView *)view {
     CGSize size = view.drawableSize;
     [self setImageWidth:(int)size.width height:(int)size.height];
+
+    // When the picture is finished and already on screen, do nothing at all,
+    // so an idle app uses no graphics card time.
+    if (![self hasPendingWork] && !_displayDirty) return;
 
     MTLRenderPassDescriptor *pass = view.currentRenderPassDescriptor;
     id<CAMetalDrawable> drawable = view.currentDrawable;
@@ -855,6 +883,7 @@ struct IntersectionSet {
     }
     [enc endEncoding];
     [cb presentDrawable:drawable];
+    _displayDirty = NO;
 
     // Measure how long the graphics card took, and adjust how many tiles to
     // draw per frame so the app stays responsive whatever the scene costs.
