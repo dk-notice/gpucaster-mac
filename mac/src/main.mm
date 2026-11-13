@@ -549,6 +549,7 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     // Lighting
     NSMenu *light = [[NSMenu alloc] initWithTitle:@"Lighting"];
     [self add:@"Random Lighting" to:light action:@selector(randomLights:) key:@"l" mods:none];
+    [self add:@"Make Lights White" to:light action:@selector(whiteLights:) key:@"w" mods:none];
     [self add:@"Brighter" to:light action:@selector(brighter:) key:@"=" mods:none];
     [self add:@"Darker" to:light action:@selector(darker:) key:@"-" mods:none];
     [light addItem:[NSMenuItem separatorItem]];
@@ -792,6 +793,16 @@ static const NSInteger kShapeItemTag = 1000;
     [_sidebar refresh];
     [self rememberLighting];
 }
+// Keeps the lights where they are and as bright as they are, but white - so
+// a shape's own colours show as written.
+- (void)whiteLights:(id)sender {
+    [self checkpoint:nil];
+    _renderer.scene->MakeLightsWhite();
+    [_renderer relight];
+    [_sidebar refresh];
+    [self rememberLighting];
+}
+
 - (void)brighter:(id)sender { [self checkpoint:@"brightness"]; _renderer.scene->cb.kLightScale *= 1.025f; [_renderer relight]; [_sidebar refresh]; }
 - (void)darker:(id)sender { [self checkpoint:@"brightness"]; _renderer.scene->cb.kLightScale *= 0.975f; [_renderer relight]; [_sidebar refresh]; }
 
@@ -827,7 +838,7 @@ static const NSInteger kShapeItemTag = 1000;
          "G geometry, N normals, A ambient occlusion, Esc stop, F reflections,\n"
          "P turn the automatic run on or off\n\n"
          "LIGHTING\n"
-         "L random lighting, = brighter, - darker\n"
+         "L random lighting, W make the lights white, = brighter, - darker\n"
          "Recent lightings are kept as small pictures in the sidebar. Cmd-Z undoes any change.\n"
          "0 mouse moves camera, 1-5 mouse moves that light, 9 all lights\n\n"
          "Every command is also in the menus, with its shortcut.";
@@ -1580,15 +1591,18 @@ static int RunSelfTest(NSString *outDir) {
 // Renders one picture without opening a window:
 //   Gpucaster --render out.png [--shape name-or-file] [--scene file.scn]
 //             [--size WIDTHxHEIGHT] [--geometry passes] [--shading passes] [--fast-math]
-//             [--surface-colour amount] [--reflectivity amount]
+//             [--surface-colour amount] [--reflectivity amount] [--fog r,g,b,density] [--white-lights]
+//             [--brightness amount]
 static int RunRender(int argc, const char *argv[]) {
     NSString *out = nil, *scene = nil;
     int width = 1920, height = 1200, geometry = 40, shading = 16;
-    bool fastMath = false;
-    float surfaceColour = -1, reflectivity = -1;   // -1 = leave as the scene has it
+    bool fastMath = false, whiteLights = false;
+    float surfaceColour = -1, reflectivity = -1, brightness = -1;   // -1 = leave as the scene has it
+    float fog[4] = {-1, -1, -1, -1};               // colour (r, g, b) and density
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--fast-math")) { fastMath = true; continue; }
+        if (!strcmp(a, "--white-lights")) { whiteLights = true; continue; }
         const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
         if (!v) break;
         if (!strcmp(a, "--render")) out = @(v);
@@ -1599,6 +1613,8 @@ static int RunRender(int argc, const char *argv[]) {
         else if (!strcmp(a, "--shading")) shading = atoi(v);
         else if (!strcmp(a, "--surface-colour")) surfaceColour = (float)atof(v);
         else if (!strcmp(a, "--reflectivity")) reflectivity = (float)atof(v);
+        else if (!strcmp(a, "--brightness")) brightness = (float)atof(v);
+        else if (!strcmp(a, "--fog")) sscanf(v, "%f,%f,%f,%f", &fog[0], &fog[1], &fog[2], &fog[3]);
         else continue;
         i++;
     }
@@ -1624,6 +1640,12 @@ static int RunRender(int argc, const char *argv[]) {
     if (![r canRenderWidth:width height:height]) { fprintf(stderr, "render: %d x %d is too large for this Mac\n", width, height); return 1; }
     if (surfaceColour >= 0) r.scene->cb.kSurfaceColorAmount = surfaceColour;
     if (reflectivity >= 0) r.scene->cb.kReflectivity = reflectivity;
+    if (brightness >= 0) r.scene->cb.kLightScale = brightness;
+    if (whiteLights) r.scene->MakeLightsWhite();
+    if (fog[3] >= 0) {
+        r.scene->cb.g_fog_color = simd_make_float4(fog[0], fog[1], fog[2], 0);
+        r.scene->cb.g_fog_params.x = fog[3];
+    }
     r.autoGeomPasses = MAX(1, geometry);
     r.autoAmboPasses = MAX(1, shading);
     [r setImageWidth:width height:height];

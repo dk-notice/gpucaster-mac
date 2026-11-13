@@ -23,7 +23,13 @@ Last updated: 2026-11-12
   Ribbon ring (a Moebius band with odd half-twists) and Banded terrain (noise terrain
   coloured in height bands). They are new formulas aiming for a similar look, not
   his unpublished code. All set `surface_color`, which needs the Surface colour
-  slider turned up to show. Fourteen built-in shapes in total.
+  slider turned up to show. A fifth, Chrome spheres, was written to match a specific
+  gallery image the user picked (set4/img_9bb51309__4d73f6cd): mirror spheres of
+  many sizes on brown ground, made from one random sphere per grid cell at six
+  halving cell sizes, with per-point reflectivity (spheres 1, ground 0). Fifteen
+  built-in shapes in total.
+- Lighting > Make Lights White (W) keeps each light's brightness and direction but
+  removes its colour, so shapes that set their own colours show them truly.
 - Undo and redo (Edit menu) cover lighting, camera, shape values, shape changes,
   new random scenes and opened scenes. Steps that changed nothing are skipped.
 - File > Export Large Image rebuilds the picture at 2 to 16 times the window size
@@ -287,6 +293,12 @@ New work continues on `main`. Ideas not yet started:
   display's current headroom. Saved images are identical with it on or off. How it
   LOOKS on the display has not been seen by the assistant at all; MetalFX is
   switched off while it is on.
+- Colours written in a shape come out much darker than written, because the final
+  picture is raised to the power 2.2 (as in the original): 0.42 becomes 0.15. Write
+  surface colours lighter than intended.
+- Matching the chrome-spheres reference needed scene settings as well as the shape:
+  white lights, reflectivity 1, surface colour 1, pale blue fog at density 0.02 (the
+  fog colour is what mirrors reflect as sky) and brightness about 1.8.
 - Fast math and picture accuracy: rendering Mandelbox, fractal dodecahedron,
   Mandelbulb and Blobs both ways at 800 x 500, the mean difference was at most 0.18
   out of 255 per colour channel and at most 0.24% of pixels differed strongly. So

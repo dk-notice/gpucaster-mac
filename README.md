@@ -92,8 +92,8 @@ inside the app.
 Two kinds of file describe a picture:
 
 - A **shape** is a `.metal` file containing the `Eval()` function that defines
-  the world. Fourteen are included in [mac/shaders/shapes](mac/shaders/shapes):
-  the ten examples from the original release, and four new ones.
+  the world. Fifteen are included in [mac/shaders/shapes](mac/shaders/shapes):
+  the ten examples from the original release, and five new ones.
 - A **scene** is a `.scn` file holding the random seed, camera position and
   lighting. It uses the same format as the Windows version, so old scenes open
   here.
@@ -106,13 +106,14 @@ Shape File opens one from anywhere.
 | From the original | From the original | New in this port |
 |---|---|---|
 | Blobs | Noise warped ground | Banded terrain |
-| Fractal dodecahedron (slow) | Polyhedra plane | Menger sponge |
-| Honeycomb floor | Reflective spheres | Ribbon ring |
-| Mandelbox | Ropey planet | Tangled rings |
-| Mandelbulb | Sphere on plane | |
+| Fractal dodecahedron (slow) | Polyhedra plane | Chrome spheres |
+| Honeycomb floor | Reflective spheres | Menger sponge |
+| Mandelbox | Ropey planet | Ribbon ring |
+| Mandelbulb | Sphere on plane | Tangled rings |
 
 The new shapes set a surface colour, so turn up **Surface colour** in the
-sidebar to see it.
+sidebar to see it, and press **W** to make the lights white so the colours
+show as written. Each shape file's opening comment says what suits it.
 
 Save dialogs suggest a name made from the shape and the date and time, such as
 `Mandelbox 2026-11-12 at 19.42.07.png`, so files don't replace each other.
@@ -151,7 +152,8 @@ Gpucaster.app/Contents/MacOS/Gpucaster --render out.png --shape mandelbox --size
 
 Options: `--shape` (a built-in name or a `.metal` file), `--scene file.scn`,
 `--size WIDTHxHEIGHT`, `--geometry passes`, `--shading passes`,
-`--surface-colour amount`, `--reflectivity amount` and `--fast-math`.
+`--surface-colour amount`, `--reflectivity amount`, `--brightness amount`,
+`--fog r,g,b,density`, `--white-lights` and `--fast-math`.
 
 ## Files
 

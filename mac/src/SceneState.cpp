@@ -269,6 +269,14 @@ void SceneState::RandomizeLights() {
     RandomizeCommonLightParams();
 }
 
+void SceneState::MakeLightsWhite() {
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        f4 &c = cb.g_light_col[i];
+        float lum = (c.x + c.y + c.z) / 3;
+        c = simd_make_float4(lum, lum, lum, c.w);
+    }
+}
+
 void SceneState::RebuildLightFrames() {
     for (int i = 0; i < MAX_LIGHTS; i++) {
         Frame &L = lights[i];

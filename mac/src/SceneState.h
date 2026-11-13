@@ -99,6 +99,9 @@ public:
     void RandomizeLightDir(int i);
     void RandomizeLight(int i, float strength);
     void RandomizeLights();
+    // Keeps each light's brightness and direction but makes it white, so a
+    // shape's own colours show truly.
+    void MakeLightsWhite();
     void RandomizeAmboParams();
     void RandomizeSpecParams();
     void RandomizeFogColor();
