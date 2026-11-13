@@ -2,17 +2,18 @@
 #
 #   make        build the app into build/Gpucaster.app
 #   make run    build, then open the app
-#   make test   build, then render one frame off-screen to build/selftest.png
+#   make test   build, then render a test scene off-screen into build/selftest/
 #   make clean  delete the build folder
 
 APP := build/Gpucaster.app
 BIN := $(APP)/Contents/MacOS/Gpucaster
-SRC := src/main.mm src/Renderer.mm
-HDR := src/Renderer.h
+SRC := src/main.mm src/Renderer.mm src/Sidebar.mm src/SceneState.cpp
+HDR := src/Renderer.h src/Sidebar.h src/SceneState.h shaders/shared_types.h
 
-CXXFLAGS   := -std=c++17 -fobjc-arc -O2 -Wall -Wextra -mmacosx-version-min=13.0
+CXXFLAGS   := -std=c++17 -fobjc-arc -O2 -Wall -Wextra -mmacosx-version-min=15.0
 FRAMEWORKS := -framework Cocoa -framework Metal -framework MetalKit \
-              -framework QuartzCore -framework ImageIO -framework CoreGraphics
+              -framework QuartzCore -framework ImageIO -framework CoreGraphics \
+              -framework UniformTypeIdentifiers
 
 all: $(BIN)
 
@@ -27,7 +28,7 @@ run: all
 	open $(APP)
 
 test: all
-	$(BIN) --selftest build/selftest.png
+	$(BIN) --selftest build/selftest
 
 clean:
 	rm -rf build
