@@ -78,7 +78,10 @@ typedef NS_ENUM(int, ChangeKind) {
     NSStackView *_stack;          // everything, top to bottom
     NSStackView *_target;         // where the building-block methods add rows
     NSMutableArray<SliderEntry *> *_entries;        // indexed by slider tag
-    NSStackView *_advanced;       // rarely needed controls, hidden until asked for
+    NSMutableArray<NSStackView *> *_disclosures;   // collapsible groups, indexed by their arrow button's tag
+    NSTextField *_speedLabel;
+    NSButton *_halfDetail;
+    NSButton *_fastMath;
     NSStackView *_shapeSection;   // sliders for the values the current shape declares
     NSMutableArray<SliderEntry *> *_shapeEntries;   // indexed by slider tag - kShapeTagBase
     NSInteger _shapeParamsSeen;   // which version of the renderer's list is on screen
@@ -503,27 +506,27 @@ static void ColorInto(NSColor *color, f4 *out) {
     [self addNote:@"Reflections are drawn when reflectivity is above zero."];
 
     // ---- Advanced (hidden until asked for) ----
-    NSView *previous = _stack.arrangedSubviews.lastObject;
-    if (previous) [_stack setCustomSpacing:16 afterView:previous];
-    NSButton *toggle = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleAdvanced:)];
-    toggle.bezelStyle = NSBezelStyleDisclosure;
-    [toggle setButtonType:NSButtonTypePushOnPushOff];
-    NSStackView *header = [NSStackView stackViewWithViews:@[toggle, [self label:@"Advanced" bold:YES]]];
-    header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
-    header.spacing = 4;
-    [_stack addArrangedSubview:header];
-
-    _advanced = [self verticalStack];
-    [self addRow:_advanced];
-    _target = _advanced;
+    [self beginDisclosure:@"Advanced"];
     [self addNote:@"Where shiny highlights fade in, by ambient level:"];
     [self addSlider:@"Highlights from" min:0 max:1 kind:ChangeRelight SCENE_VALUE(cb.kLightAmboSpecLo)];
     [self addSlider:@"Highlights to" min:0 max:1 kind:ChangeRelight SCENE_VALUE(cb.kLightAmboSpecHi)];
     [self addNote:@"Directional shadowing:"];
     [self addSlider:@"Shadow scale" min:0 max:8 kind:ChangeRelight SCENE_VALUE(cb.kLightAmboDirScale)];
     [self addSlider:@"Shadow bias" min:-2 max:2 kind:ChangeRelight SCENE_VALUE(cb.kLightAmboDirBias)];
-    _target = _stack;
-    _advanced.hidden = YES;
+    [self endDisclosure];
+
+    // ---- Experimental (hidden until asked for) ----
+    [self beginDisclosure:@"Experimental"];
+    [self addWrappedNote:@"Ways of trading accuracy for speed. They are remembered between launches but are not saved in scenes, and large exports always use full detail."];
+    _speedLabel = [self label:@"Speed: not measured yet" bold:NO];
+    _speedLabel.textColor = NSColor.labelColor;
+    _speedLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
+    [_target addArrangedSubview:_speedLabel];
+    _halfDetail = [self addCheckbox:@"Half detail" action:@selector(halfDetailChanged:)];
+    [self addWrappedNote:@"Draws a quarter of the pixels and enlarges the result. About four times faster; the picture is softer."];
+    _fastMath = [self addCheckbox:@"Fast math" action:@selector(fastMathChanged:)];
+    [self addWrappedNote:@"Lets the graphics card take shortcuts in arithmetic. Much faster for some shapes (three to four times for the Mandelbox and Blobs), little different for others. In tests the picture was almost identical, but it can differ. The shaders are recompiled when this changes."];
+    [self endDisclosure];
     #undef SCENE_VALUE
 }
 
@@ -738,8 +741,89 @@ static void ColorInto(NSColor *color, f4 *out) {
     if (well.isActive) [NSColorPanel sharedColorPanel].color = color;
 }
 
-- (void)toggleAdvanced:(NSButton *)b {
-    _advanced.hidden = (b.state != NSControlStateValueOn);
+// Starts a collapsible group at the bottom of the sidebar: a heading with an
+// arrow, and controls that stay hidden until the arrow is clicked.  Rows added
+// before -endDisclosure go inside it.
+- (void)beginDisclosure:(NSString *)title {
+    if (!_disclosures) _disclosures = [NSMutableArray array];
+    NSView *previous = _stack.arrangedSubviews.lastObject;
+    if (previous) [_stack setCustomSpacing:16 afterView:previous];
+    NSButton *arrow = [NSButton buttonWithTitle:@"" target:self action:@selector(toggleDisclosure:)];
+    arrow.bezelStyle = NSBezelStyleDisclosure;
+    [arrow setButtonType:NSButtonTypePushOnPushOff];
+    arrow.tag = (NSInteger)_disclosures.count;
+    NSStackView *header = [NSStackView stackViewWithViews:@[arrow, [self label:title bold:YES]]];
+    header.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    header.spacing = 4;
+    [_stack addArrangedSubview:header];
+
+    NSStackView *content = [self verticalStack];
+    [self addRow:content];
+    content.hidden = YES;
+    [_disclosures addObject:content];
+    _target = content;
+}
+
+- (void)endDisclosure { _target = _stack; }
+
+// For checking the layout without a person: opens every collapsible group and
+// scrolls to the bottom, where they are.
+- (void)expandAllForSnapshot {
+    for (NSStackView *group in _disclosures) group.hidden = NO;
+    [self layoutSubtreeIfNeeded];
+    NSView *doc = _stack.superview;
+    [doc scrollPoint:NSMakePoint(0, NSMaxY(doc.bounds))];
+}
+
+- (void)toggleDisclosure:(NSButton *)b {
+    _disclosures[(NSUInteger)b.tag].hidden = (b.state != NSControlStateValueOn);
+}
+
+// A note that wraps onto several lines to fit the sidebar.
+- (void)addWrappedNote:(NSString *)text {
+    NSTextField *note = [NSTextField wrappingLabelWithString:text];
+    note.selectable = NO;
+    note.font = [NSFont systemFontOfSize:10];
+    note.textColor = NSColor.tertiaryLabelColor;
+    [self addRow:note];
+}
+
+static NSString *const kPrefHalfDetail = @"HalfDetail";
+static NSString *const kPrefFastMath = @"FastMath";
+
+- (void)halfDetailChanged:(NSButton *)b {
+    BOOL on = (b.state == NSControlStateValueOn);
+    _renderer.detailDivisor = on ? 2 : 1;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPrefHalfDetail];
+}
+
+- (void)fastMathChanged:(NSButton *)b {
+    BOOL on = (b.state == NSControlStateValueOn);
+    _renderer.fastMath = on;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPrefFastMath];
+}
+
+- (void)applySavedExperimentalOptions {
+    NSUserDefaults *d = [NSUserDefaults standardUserDefaults];
+    // (Environment variables override, for measuring each option from the command line.)
+    BOOL half = getenv("GPUCASTER_HALF") ? atoi(getenv("GPUCASTER_HALF")) != 0 : [d boolForKey:kPrefHalfDetail];
+    BOOL fast = getenv("GPUCASTER_FASTMATH") ? atoi(getenv("GPUCASTER_FASTMATH")) != 0 : [d boolForKey:kPrefFastMath];
+    _renderer.detailDivisor = half ? 2 : 1;
+    _renderer.fastMath = fast;
+    [self syncExperimental];
+}
+
+// Keeps the Experimental group's ticks and speed reading up to date.
+- (void)syncExperimental {
+    _halfDetail.state = (_renderer.detailDivisor > 1) ? NSControlStateValueOn : NSControlStateValueOff;
+    _fastMath.state = _renderer.fastMath ? NSControlStateValueOn : NSControlStateValueOff;
+    double rate = _renderer.passesPerSecond;
+    if (rate > 0) {
+        double megapixels = _renderer.imageWidth * _renderer.imageHeight * 1e-6;
+        _speedLabel.stringValue = [NSString stringWithFormat:@"Speed: %.1f passes/s at %.1f MP", rate, megapixels];
+    } else if (_renderer.finished && ![_speedLabel.stringValue hasSuffix:@"(last run)"] && ![_speedLabel.stringValue hasPrefix:@"Speed: not"]) {
+        _speedLabel.stringValue = [_speedLabel.stringValue stringByAppendingString:@"  (last run)"];
+    }
 }
 
 #pragma mark - Refresh

@@ -157,6 +157,7 @@
     _sidebar.onKeepLighting = ^{ [weakSelf rememberLighting]; };
     _sidebar.onPickLighting = ^(NSInteger index) { [weakSelf pickLighting:index]; };
     [self rememberLighting];
+    [_sidebar applySavedExperimentalOptions];
     _renderer.onShaderResult = ^(NSString *error) { [weakSelf shaderResult:error]; };
 
     NSView *bar = [self buildToolbar];
@@ -227,7 +228,7 @@
         NSString *path = [NSString stringWithUTF8String:exportTo];
         int scale = getenv("GPUCASTER_EXPORT_SCALE") ? MAX(1, atoi(getenv("GPUCASTER_EXPORT_SCALE"))) : 2;
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
-            [self startExportWidth:self->_renderer.imageWidth * scale height:self->_renderer.imageHeight * scale path:path];
+            [self startExportWidth:(int)self->_view.drawableSize.width * scale height:(int)self->_view.drawableSize.height * scale path:path];
         });
     }
 
@@ -260,6 +261,9 @@
     const char *shot = getenv("GPUCASTER_UISHOT");
     if (shot && *shot) {
         NSString *path = [NSString stringWithUTF8String:shot];
+        if (getenv("GPUCASTER_UISHOT_BOTTOM")) {   // show the collapsible groups at the bottom of the sidebar
+            dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ [self->_sidebar expandAllForSnapshot]; });
+        }
         dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 4 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
             NSView *content = self->_window.contentView;
             NSBitmapImageRep *rep = [content bitmapImageRepForCachingDisplayInRect:content.bounds];
@@ -361,6 +365,7 @@
     [self refreshShapePopup];
     [_sidebar syncShapeParams];
     if (!_sidebar.hidden) [_sidebar syncLights];
+    if (!_sidebar.hidden) [_sidebar syncExperimental];
     _status.stringValue = [_renderer statusText];
 
     // One button: pause while working, resume when paused, refine when finished.
@@ -913,7 +918,8 @@ static const NSInteger kShapeItemTag = 1000;
 // the background, with a progress sheet, and saves it.
 - (void)exportLargeImage:(id)sender {
     if (_exporter) return;
-    const int w = _renderer.imageWidth, h = _renderer.imageHeight;
+    // Sizes are multiples of the window in screen pixels, whatever detail the window itself is using.
+    const int w = (int)_view.drawableSize.width, h = (int)_view.drawableSize.height;
 
     NSPopUpButton *sizes = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 330, 26) pullsDown:NO];
     for (int m : {2, 3, 4, 6, 8, 12, 16}) {
@@ -1331,6 +1337,29 @@ static int RunSelfTest(NSString *outDir) {
         if (bad) failures++;
     }
 
+    // Fast math (an experimental option) must compile and give a picture close to the normal one.
+    if (defaultShape) {
+        Renderer *f = [[Renderer alloc] initWithDevice:device];
+        f.autoEnabled = NO;
+        [f setImageWidth:480 height:300];
+        f.fastMath = YES;
+        NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:60];
+        do { [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]]; } while (f.compiling && [limit timeIntervalSinceNow] > 0);
+        [f runPasses:40];
+        float depthFast = 0, depthSafe = 0; simd_float4 n, am;
+        [f readPixelX:240 y:200 depth:&depthFast normal:&n ambo:&am];
+        Renderer *g = [[Renderer alloc] initWithDevice:device];
+        g.autoEnabled = NO;
+        [g setImageWidth:480 height:300];
+        [g runPasses:40];
+        [g readPixelX:240 y:200 depth:&depthSafe normal:&n ambo:&am];
+        printf("selftest: fast math centre depth %.4f, normal %.4f\n", depthFast, depthSafe);
+        if (f.lastError || !f.fastMath || !(depthFast > 0) || fabsf(depthFast - depthSafe) > 0.01f) {
+            fprintf(stderr, "selftest: fast math failed or changed the picture too much\n");
+            failures++;
+        }
+    }
+
     // Every shape in the shapes folder must compile.
     if (defaultShape) {
         NSArray<NSString *> *shapes = [r availableShapes];
@@ -1365,12 +1394,14 @@ static int RunSelfTest(NSString *outDir) {
 
 // Renders one picture without opening a window:
 //   Gpucaster --render out.png [--shape name-or-file] [--scene file.scn]
-//             [--size WIDTHxHEIGHT] [--geometry passes] [--shading passes]
+//             [--size WIDTHxHEIGHT] [--geometry passes] [--shading passes] [--fast-math]
 static int RunRender(int argc, const char *argv[]) {
     NSString *out = nil, *scene = nil;
     int width = 1920, height = 1200, geometry = 40, shading = 16;
+    bool fastMath = false;
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
+        if (!strcmp(a, "--fast-math")) { fastMath = true; continue; }
         const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
         if (!v) break;
         if (!strcmp(a, "--render")) out = @(v);
@@ -1387,6 +1418,12 @@ static int RunRender(int argc, const char *argv[]) {
     setenv("GPUCASTER_SHAPE", "blobs", 0);   // unless --shape said otherwise
     Renderer *r = [[Renderer alloc] initWithDevice:device];
     if (r.lastError) { fprintf(stderr, "render: shader error:\n%s\n", r.lastError.UTF8String); return 1; }
+    if (fastMath) {
+        r.fastMath = YES;
+        NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:120];
+        do { [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]]; } while (r.compiling && [limit timeIntervalSinceNow] > 0);
+        if (r.lastError) { fprintf(stderr, "render: shader error with fast math:\n%s\n", r.lastError.UTF8String); return 1; }
+    }
     if (scene) {
         std::string error;
         if (!r.scene->Import(scene.fileSystemRepresentation, false, &error)) {

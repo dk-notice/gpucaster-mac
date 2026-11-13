@@ -107,6 +107,16 @@ extern NSString *const kVizModeNames[kNumVizModes];
 - (void)reloadShadersInBackground;
 - (void)reloadShadersIfFilesChanged;  // call this regularly
 
+// --- Experimental options ---------------------------------------------------
+// Relaxed arithmetic in the shaders: usually faster, but can change the
+// picture slightly.  Changing it recompiles the shaders.
+@property (nonatomic) BOOL fastMath;
+// 1 = full detail; 2 = render at half the window's resolution (a quarter of
+// the pixels) and enlarge the result to fit.
+@property (nonatomic) int detailDivisor;
+// Passes completed per second, measured over the last few seconds (0 if unknown).
+@property (nonatomic, readonly) double passesPerSecond;
+
 // --- Status -----------------------------------------------------------------
 @property (nonatomic, readonly) GenMode stage;
 @property (nonatomic, readonly) BOOL onReflection;

@@ -25,6 +25,10 @@ Last updated: 2026-11-12
 - Scene files (`.scn`) use the Windows version's format. Saving a scene or image
   also writes the shape beside it as `name.metal`; opening a scene picks that up.
 - An idle app uses no graphics card time.
+- Experimental section (after 1.1, collapsed at the bottom of the sidebar): a live
+  speed reading in passes per second, a Half detail toggle (render at half the
+  window's resolution and enlarge) and a Fast math toggle (relaxed shader
+  arithmetic). Both are app preferences, off by default, not saved in scenes.
 - Lights section (new in 1.1): each light is listed by where it shines from as seen
   from the camera, with a colour swatch and an on/off tick. A direction ball shows
   the lights as dots (solid = lights the front, hollow = from behind); dragging a dot
@@ -97,7 +101,10 @@ and an Apple silicon Mac.
 
 Testing aids (environment variables): `GPUCASTER_SHAPE=name` or a full path chooses
 the shape; `GPUCASTER_UISHOT=path` saves a picture of the window's controls after 4
-seconds and quits; `GPUCASTER_BENCH=1` measures geometry passes per second in the
+seconds and quits (`GPUCASTER_UISHOT_BOTTOM=1` first opens the collapsed groups and
+scrolls to them); `GPUCASTER_HALF=1` / `GPUCASTER_FASTMATH=1` switch the experimental
+options on for one run; `--render ... --fast-math` renders with fast math;
+`GPUCASTER_BENCH=1` measures geometry passes per second in the
 live window and quits; a diagnostic log of mouse presses and slider changes is written
 to `~/Library/Logs/Gpucaster/debug.log` whenever the app runs from the source folder
 (or with `GPUCASTER_LOG` set), replaced at each launch; `GPUCASTER_UICHECK=1` drives every sidebar slider through its
@@ -151,6 +158,10 @@ the assistant on this Mac, which is why the layout snapshot exists.
 - The sidebar's "Mouse moves" pop-up is gone; dragging lights in the picture is still
   available from the Lighting menu and keys 0, 1-5 and 9, and the status line says
   when it is on.
+- Half detail and Fast math are remembered as app preferences (not in scene files)
+  and read by the app at launch, not by the renderer, so tests and command-line
+  renders are unaffected. Exports are sized from the window's screen pixels, so
+  Half detail does not shrink them; they do inherit Fast math.
 - Shader compiles start immediately and run side by side; only the newest request's
   result is used. Whether a shape's slider values are kept or reset is decided from
   the file the shaders were actually compiled from.
@@ -196,8 +207,8 @@ direction ball, brightness slider and solo; colour picker fix; about twice the
 rendering speed). New work continues on `main`; later milestones get their own
 tags. Ideas not yet started:
 
-1. A half-detail (non-Retina) option, four times faster; offered and declined for
-   now.
+1. More experimental toggles, in the order agreed: MetalFX upscaling (on top of
+   Half detail), skipping empty sky, extended brightness (EDR).
 1. Save the lighting history between launches.
 2. A zoom lens for checking detail (the original's Z key).
 3. Notarisation, if an Apple developer account is ever available.
@@ -226,6 +237,15 @@ tags. Ideas not yet started:
   the pacing above. The other possible half, not addressed at the user's choice: the
   Mac renders at full Retina resolution, four times the pixels of an unscaled window.
   A "half detail" option was offered and declined for now.
+- Experimental toggles, measured in the window at 1960 x 1448 on this Mac, geometry
+  passes per second (normal / fast math / half detail / both): fractal dodecahedron
+  16.7 / 18.0 / 68.7 / 72.0; Mandelbox 95 / 293 / 386 / 1138. Half detail is about
+  4.1x everywhere. Fast math is about 3x for the Mandelbox and Blobs and under 10%
+  for the fractal dodecahedron and Mandelbulb.
+- Fast math and picture accuracy: rendering Mandelbox, fractal dodecahedron,
+  Mandelbulb and Blobs both ways at 800 x 500, the mean difference was at most 0.18
+  out of 255 per colour channel and at most 0.24% of pixels differed strongly. So
+  it is far safer than assumed when it was first switched off, on these shapes.
 - Export timing on this Mac (M4 Max): the fractal dodecahedron, the slowest example,
   at 7840 x 5792 (45 megapixels) with 40 geometry and 16 shading passes took 4 minutes
   38 seconds and produced an 89 MB PNG.

@@ -93,6 +93,7 @@ struct IntersectionSet {
     BOOL _relightWhole;
     BOOL _displayDirty;            // the window needs the picture copied to it again
     int _slicesInFlight;           // work slices handed to the graphics card and not yet finished
+    std::vector<CFTimeInterval> _passEnds;   // when recent passes finished, for measuring speed
     CFTimeInterval _lastInput;     // when the camera, a light or a setting was last changed
     BOOL _autoActive;
     BOOL _autoFinishedMain;        // the automatic run completed the primary rays
@@ -115,6 +116,7 @@ struct IntersectionSet {
         _cur = &_main;
         _mouseTarget = -1;
         _soloLight = -1;
+        _detailDivisor = 1;
         _autoEnabled = YES;
         _autoActive = YES;
         _autoGeomPasses = 40;
@@ -161,6 +163,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         _cur = &_main;
         _mouseTarget = -1;
         _soloLight = -1;
+        _detailDivisor = 1;
         _autoEnabled = YES;
         _autoActive = YES;
         _autoGeomPasses = o.autoGeomPasses;
@@ -171,6 +174,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         _shapePath = o.shapePath;
         _shaderStamp = o->_shaderStamp;
         _shapeParams = o.shapeParams;
+        _fastMath = o->_fastMath;
         _pipelines = o->_pipelines;
         _scene = o->_scene;
         _scene.cb.g_viz_mode = 0;
@@ -317,6 +321,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 + (Pipelines *)buildPipelinesWithDevice:(id<MTLDevice>)device
                                     dir:(NSString *)dir
                                   shape:(NSString *)shapePath
+                               fastMath:(BOOL)fastMath
                                   error:(NSString **)error {
     if (!dir) {
         if (error) *error = @"Could not find the shaders folder.";
@@ -329,7 +334,8 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
     MTLCompileOptions *opts = [MTLCompileOptions new];
     // Fractals are sensitive to tiny rounding differences, and the shaders rely
     // on exact handling of "not a number" values, so turn off risky optimisations.
-    opts.mathMode = MTLMathModeSafe;
+    // (Relaxed arithmetic is available as an experimental option.)
+    opts.mathMode = fastMath ? MTLMathModeFast : MTLMathModeSafe;
 
     NSError *err = nil;
     id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
@@ -448,7 +454,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 - (BOOL)reloadShadersNow {
     NSString *err = nil;
     ++_compileGeneration;   // anything still compiling in the background is now out of date
-    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:self.shapePath error:&err];
+    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:self.shapePath fastMath:_fastMath error:&err];
     _shaderStamp = [self latestShaderModification];
     if (p) {
         [self adoptPipelines:p];
@@ -469,9 +475,10 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
     id<MTLDevice> device = _device;
     NSString *dir = self.shaderDir;
     NSString *shape = self.shapePath;
+    const BOOL fastMath = _fastMath;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *err = nil;
-        Pipelines *p = [Renderer buildPipelinesWithDevice:device dir:dir shape:shape error:&err];
+        Pipelines *p = [Renderer buildPipelinesWithDevice:device dir:dir shape:shape fastMath:fastMath error:&err];
         dispatch_async(dispatch_get_main_queue(), ^{
             self->_compilesInFlight--;
             self.compiling = (self->_compilesInFlight > 0);
@@ -603,7 +610,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 
 - (NSString *)compileErrorForShape:(NSString *)path {
     NSString *err = nil;
-    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:path error:&err];
+    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:path fastMath:_fastMath error:&err];
     return p ? nil : (err ?: @"Unknown error.");
 }
 
@@ -721,6 +728,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 #pragma mark - Commands
 
 - (void)clearAll {
+    _passEnds.clear();
     _cur = &_main;
     _main.clear_flags = CLEAR_ALL;
     _refl.clear_flags = CLEAR_ALL;
@@ -789,6 +797,19 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 - (void)sceneReplaced {
     [self uploadNoise];
     [self clearAll];
+}
+
+- (void)setFastMath:(BOOL)fastMath {
+    if (fastMath == _fastMath) return;
+    _fastMath = fastMath;
+    [self reloadShadersInBackground];
+}
+
+- (void)setDetailDivisor:(int)detailDivisor {
+    detailDivisor = MAX(1, MIN(detailDivisor, 4));
+    if (detailDivisor == _detailDivisor) return;
+    _detailDivisor = detailDivisor;
+    _displayDirty = YES;   // the next screen refresh resizes the picture and starts it again
 }
 
 - (void)setSoloLight:(int)soloLight {
@@ -898,6 +919,16 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 - (GenMode)stage { return _cur->gen; }
 - (BOOL)onReflection { return _cur == &_refl; }
 - (BOOL)autoRunning { return _autoActive; }
+
+// Passes per second over the last three seconds of work.
+- (double)passesPerSecond {
+    const CFTimeInterval now = CACurrentMediaTime();
+    size_t first = _passEnds.size();
+    while (first > 0 && now - _passEnds[first - 1] < 3.0) first--;
+    const size_t n = _passEnds.size() - first;
+    if (n < 2 || now - _passEnds.back() > 1.5) return 0;   // too few to measure, or not working at the moment
+    return (double)(n - 1) / (_passEnds.back() - _passEnds[first]);
+}
 - (BOOL)finished { return !_autoActive && _cur->gen == GenNone && _cur->next == GenNone; }
 
 // How far through the automatic plan the picture is (0..1), or -1 when the
@@ -1049,6 +1080,8 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 
 - (void)endOfPass {
     IntersectionSet *s = _cur;
+    _passEnds.push_back(CACurrentMediaTime());
+    if (_passEnds.size() > 240) _passEnds.erase(_passEnds.begin());
     if (s->gen == GenGeom) s->geom_passes++;
     if (s->gen == GenNormals) s->normals_ready = true;
     // Stop after one pass of normals, so that the depths and normals stay in step.
@@ -1207,7 +1240,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 #pragma mark - MTKViewDelegate
 
 - (void)mtkView:(MTKView *)view drawableSizeWillChange:(CGSize)size {
-    [self setImageWidth:(int)size.width height:(int)size.height];
+    [self setImageWidth:(int)size.width / _detailDivisor height:(int)size.height / _detailDivisor];
     _displayDirty = YES;
 }
 
@@ -1259,7 +1292,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 
 - (void)drawInMTKView:(MTKView *)view {
     CGSize size = view.drawableSize;
-    [self setImageWidth:(int)size.width height:(int)size.height];
+    [self setImageWidth:(int)size.width / _detailDivisor height:(int)size.height / _detailDivisor];
 
     [self pumpWork];
 

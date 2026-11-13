@@ -26,6 +26,12 @@ NSString *GCLogPath(void);
 // on the camera, so this is called regularly).  Cheap.
 - (void)syncLights;
 
+// Experimental options (half detail, fast math): load the saved choices at
+// launch, and keep the ticks and the speed reading current.
+- (void)applySavedExperimentalOptions;
+- (void)syncExperimental;
+- (void)expandAllForSnapshot;   // testing aid: open the collapsible groups and scroll to them
+
 // Rebuilds the Shape section if the shape or its adjustable values changed.
 // Cheap to call often.
 - (void)syncShapeParams;
