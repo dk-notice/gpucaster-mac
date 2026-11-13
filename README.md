@@ -92,7 +92,8 @@ inside the app.
 Two kinds of file describe a picture:
 
 - A **shape** is a `.metal` file containing the `Eval()` function that defines
-  the world. Ten are included in [mac/shaders/shapes](mac/shaders/shapes).
+  the world. Fourteen are included in [mac/shaders/shapes](mac/shaders/shapes):
+  the ten examples from the original release, and four new ones.
 - A **scene** is a `.scn` file holding the random seed, camera position and
   lighting. It uses the same format as the Windows version, so old scenes open
   here.
@@ -102,13 +103,16 @@ menu. Your own shapes live in a `Gpucaster Shapes` folder in Documents (Shape >
 Show My Shapes Folder) and are listed below the built-in ones. Shape > Open
 Shape File opens one from anywhere.
 
-| Shape | Shape |
-|---|---|
-| Blobs | Noise warped ground |
-| Fractal dodecahedron (slow) | Polyhedra plane |
-| Honeycomb floor | Reflective spheres |
-| Mandelbox | Ropey planet |
-| Mandelbulb | Sphere on plane |
+| From the original | From the original | New in this port |
+|---|---|---|
+| Blobs | Noise warped ground | Banded terrain |
+| Fractal dodecahedron (slow) | Polyhedra plane | Menger sponge |
+| Honeycomb floor | Reflective spheres | Ribbon ring |
+| Mandelbox | Ropey planet | Tangled rings |
+| Mandelbulb | Sphere on plane | |
+
+The new shapes set a surface colour, so turn up **Surface colour** in the
+sidebar to see it.
 
 Save dialogs suggest a name made from the shape and the date and time, such as
 `Mandelbox 2026-11-12 at 19.42.07.png`, so files don't replace each other.
@@ -146,7 +150,8 @@ Gpucaster.app/Contents/MacOS/Gpucaster --render out.png --shape mandelbox --size
 ```
 
 Options: `--shape` (a built-in name or a `.metal` file), `--scene file.scn`,
-`--size WIDTHxHEIGHT`, `--geometry passes` and `--shading passes`.
+`--size WIDTHxHEIGHT`, `--geometry passes`, `--shading passes`,
+`--surface-colour amount`, `--reflectivity amount` and `--fast-math`.
 
 ## Files
 

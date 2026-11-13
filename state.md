@@ -18,6 +18,12 @@ Last updated: 2026-11-12
 - Shapes: each world is one `.metal` file in `mac/shaders/shapes/` holding an `Eval()`
   function. `// param: name = default (min to max)` lines become sidebar sliders.
   Saving a shape file reloads it; errors show the file and line.
+- Four new built-in shapes (after 1.2), written for this port after looking at Ryan
+  Geiss's gallery (geisswerks.com/ryan/PROG-STIL): Menger sponge, Tangled rings,
+  Ribbon ring (a Moebius band with odd half-twists) and Banded terrain (noise terrain
+  coloured in height bands). They are new formulas aiming for a similar look, not
+  his unpublished code. All set `surface_color`, which needs the Surface colour
+  slider turned up to show. Fourteen built-in shapes in total.
 - Undo and redo (Edit menu) cover lighting, camera, shape values, shape changes,
   new random scenes and opened scenes. Steps that changed nothing are skipped.
 - File > Export Large Image rebuilds the picture at 2 to 16 times the window size
@@ -228,6 +234,9 @@ scenes and shapes working are a minor version; fixes only would be a patch (1.2.
 a change that breaks old files would be 2.0. Released versions are never altered.
 New work continues on `main`. Ideas not yet started:
 
+1. Ideas from the gallery not done: a sky or horizon gradient behind terrains (his
+   have one; ours go to black or flat fog), and using the release's unported
+   `textures/h1.png`, which is probably a height-to-colour map (an inference).
 1. Possible bigger changes discussed but not started: running the stages as compute
    shaders (a replacement engine, not a toggle), and compiling the shape separately
    from the other shader code so switching shapes is faster.

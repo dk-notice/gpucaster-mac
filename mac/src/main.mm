@@ -1580,10 +1580,12 @@ static int RunSelfTest(NSString *outDir) {
 // Renders one picture without opening a window:
 //   Gpucaster --render out.png [--shape name-or-file] [--scene file.scn]
 //             [--size WIDTHxHEIGHT] [--geometry passes] [--shading passes] [--fast-math]
+//             [--surface-colour amount] [--reflectivity amount]
 static int RunRender(int argc, const char *argv[]) {
     NSString *out = nil, *scene = nil;
     int width = 1920, height = 1200, geometry = 40, shading = 16;
     bool fastMath = false;
+    float surfaceColour = -1, reflectivity = -1;   // -1 = leave as the scene has it
     for (int i = 1; i < argc; i++) {
         const char *a = argv[i];
         if (!strcmp(a, "--fast-math")) { fastMath = true; continue; }
@@ -1595,6 +1597,8 @@ static int RunRender(int argc, const char *argv[]) {
         else if (!strcmp(a, "--size")) sscanf(v, "%dx%d", &width, &height);
         else if (!strcmp(a, "--geometry")) geometry = atoi(v);
         else if (!strcmp(a, "--shading")) shading = atoi(v);
+        else if (!strcmp(a, "--surface-colour")) surfaceColour = (float)atof(v);
+        else if (!strcmp(a, "--reflectivity")) reflectivity = (float)atof(v);
         else continue;
         i++;
     }
@@ -1618,6 +1622,8 @@ static int RunRender(int argc, const char *argv[]) {
         [r sceneReplaced];
     }
     if (![r canRenderWidth:width height:height]) { fprintf(stderr, "render: %d x %d is too large for this Mac\n", width, height); return 1; }
+    if (surfaceColour >= 0) r.scene->cb.kSurfaceColorAmount = surfaceColour;
+    if (reflectivity >= 0) r.scene->cb.kReflectivity = reflectivity;
     r.autoGeomPasses = MAX(1, geometry);
     r.autoAmboPasses = MAX(1, shading);
     [r setImageWidth:width height:height];
