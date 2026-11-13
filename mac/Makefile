@@ -16,8 +16,8 @@ VERSION := 1.0
 APP := build/Gpucaster.app
 BIN := $(APP)/Contents/MacOS/Gpucaster
 RES := $(APP)/Contents/Resources
-SRC := src/main.mm src/Renderer.mm src/Sidebar.mm src/SceneState.cpp
-HDR := src/Renderer.h src/Sidebar.h src/SceneState.h shaders/shared_types.h
+SRC := src/main.mm src/Renderer.mm src/Sidebar.mm src/LightControls.mm src/SceneState.cpp
+HDR := src/Renderer.h src/Sidebar.h src/LightControls.h src/SceneState.h shaders/shared_types.h
 
 CXXFLAGS   := -std=c++17 -fobjc-arc -O2 -Wall -Wextra -mmacosx-version-min=15.0
 FRAMEWORKS := -framework Cocoa -framework Metal -framework MetalKit \

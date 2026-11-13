@@ -12,6 +12,10 @@
 // the lighting (random lighting, opening a scene, dragging a light).
 - (void)refresh;
 
+// Brings the light list and direction ball up to date (their wording depends
+// on the camera, so this is called regularly).  Cheap.
+- (void)syncLights;
+
 // Rebuilds the Shape section if the shape or its adjustable values changed.
 // Cheap to call often.
 - (void)syncShapeParams;

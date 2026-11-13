@@ -104,6 +104,7 @@ struct IntersectionSet {
         _queue = [device newCommandQueue];
         _cur = &_main;
         _mouseTarget = -1;
+        _soloLight = -1;
         _autoEnabled = YES;
         _autoActive = YES;
         _autoGeomPasses = 40;
@@ -149,6 +150,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         _queue = [_device newCommandQueue];
         _cur = &_main;
         _mouseTarget = -1;
+        _soloLight = -1;
         _autoEnabled = YES;
         _autoActive = YES;
         _autoGeomPasses = o.autoGeomPasses;
@@ -777,6 +779,12 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     [self clearAll];
 }
 
+- (void)setSoloLight:(int)soloLight {
+    if (soloLight == _soloLight) return;
+    _soloLight = soloLight;
+    _relightWhole = YES;
+}
+
 - (void)setVizMode:(int)mode {
     _scene.cb.g_viz_mode = (uint32_t)((mode % kNumVizModes + kNumVizModes) % kNumVizModes);
     _relightWhole = YES;
@@ -911,6 +919,9 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     [s appendFormat:@"  ·  geometry %d, ambient %d", self.geomPasses, self.amboPasses];
     if (_cur == &_refl) [s appendString:@"  ·  reflection rays"];
     if (_scene.cb.g_viz_mode != 0) [s appendFormat:@"  ·  view: %@", kVizModeNames[_scene.cb.g_viz_mode]];
+    if (_mouseTarget == 9) [s appendString:@"  ·  mouse moves all lights (0 for camera)"];
+    else if (_mouseTarget >= 0) [s appendFormat:@"  ·  mouse moves light %d (0 for camera)", _mouseTarget + 1];
+    if (_soloLight >= 0) [s appendFormat:@"  ·  light %d alone", _soloLight + 1];
     if (self.compiling) [s appendString:@"  ·  compiling…"];
     else if (self.lastError) [s appendString:@"  ·  SHADER ERROR"];
     return s;
@@ -1105,7 +1116,13 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 
     // Settings for this frame.
     [self fillFrameUniforms:n];
-    Uniforms &u = _scene.cb;
+    Uniforms u = _scene.cb;
+    if (_soloLight >= 0) {
+        // Showing one light alone: switch the others off in this frame's copy only.
+        for (int i = 0; i < MAX_LIGHTS; i++) {
+            if (i != _soloLight) u.g_light_col[i] = simd_make_float4(0, 0, 0, 0);
+        }
+    }
     id<MTLBuffer> ubuf = [_device newBufferWithBytes:&u length:sizeof(u) options:MTLResourceStorageModeShared];
 
     // Fresh random numbers for every tile.

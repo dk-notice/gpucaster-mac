@@ -25,6 +25,11 @@ Last updated: 2026-11-12
 - Scene files (`.scn`) use the Windows version's format. Saving a scene or image
   also writes the shape beside it as `name.metal`; opening a scene picks that up.
 - An idle app uses no graphics card time.
+- Lights section (after 1.0): each light is listed by where it shines from as seen
+  from the camera, with a colour swatch and an on/off tick. A direction ball shows
+  the lights as dots (solid = lights the front, hollow = from behind); dragging a dot
+  moves the light and double-clicking flips it. Brightness is its own slider, and a
+  hold-down button shows the selected light alone.
 - Packaged as version 1.0: a self-contained, double-clickable app with an icon and
   the shaders inside it. `make dist` produces `mac/build/Gpucaster-1.0.zip`.
 - Your own shapes live in `~/Documents/Gpucaster Shapes`, listed below the built-in
@@ -48,6 +53,8 @@ Last updated: 2026-11-12
 - Scene files survive save and reload.
 - A shape in the user shapes folder is listed and loads; shapes inside the app are
   treated as read-only.
+- Lights: directions set in the camera's terms read back the same and get the
+  expected wording; showing one light alone changes the picture but not the scene.
 
 Also checked by hand-run commands: every shape renders when selected, a shape file
 outside the folder loads, a broken shape reports its own file and line, and the
@@ -58,6 +65,11 @@ The packaged zip was unpacked in a separate folder and the whole self-test passe
 there using the shaders inside the app; its signature verifies and its window opens.
 
 ## Not yet verified (needs a person at the window)
+
+- The light direction ball: dragging dots, double-click to flip, clicking the ball
+  to move the selected light. Light rows: selecting, on/off ticks. The hold-down
+  "see this light alone" button. Only their layout and the maths behind them are
+  checked.
 
 - The downloaded app's first launch: macOS will block it until allowed in System
   Settings > Privacy & Security (it is not notarised). Not tried on another Mac.
@@ -119,6 +131,13 @@ the assistant on this Mac, which is why the layout snapshot exists.
   Documents at first launch.
 - The icon is generated, not hand-drawn: `make icon` renders the fractal
   dodecahedron with the app and masks it to the standard rounded square.
+- Lights have a direction but no position (as in the original), so they are shown
+  on a direction ball and described in words, not drawn in the 3D picture.
+- A light's brightness is its strongest colour channel. The colour well sets hue
+  only; the scene file format is unchanged.
+- The sidebar's "Mouse moves" pop-up is gone; dragging lights in the picture is still
+  available from the Lighting menu and keys 0, 1-5 and 9, and the status line says
+  when it is on.
 - Shader compiles start immediately and run side by side; only the newest request's
   result is used. Whether a shape's slider values are kept or reset is decided from
   the file the shaders were actually compiled from.
@@ -146,7 +165,9 @@ the assistant on this Mac, which is why the layout snapshot exists.
 ## Next steps
 
 Version 1.0 is the finished baseline. New work continues on `main`; later
-milestones get their own tags (v1.1, v2.0 and so on). Ideas not yet started:
+milestones get their own tags (v1.1, v2.0 and so on). The reworked Lights section
+is the first change after 1.0 and is not in the installed copy or the release.
+Ideas not yet started:
 
 1. Save the lighting history between launches.
 2. A zoom lens for checking detail (the original's Z key).

@@ -61,6 +61,10 @@ inside the app.
 - Press **L** for random lighting, and use the sidebar to adjust it. The last
   twelve lightings are kept as small pictures in the sidebar; click one to go
   back to it.
+- **Lights** are listed by where they shine from ("Upper left, in front"), with
+  a ball showing each as a dot. Drag a dot to move a light, double-click to
+  flip it between front and behind, and hold **Hold to see this light alone**
+  to see what one light contributes.
 - **Cmd-Z** undoes any change: lighting, camera, shape settings, shape, scene.
 - **File > Export Large Image** builds the picture again at up to sixteen times
   the window's size, limited by the graphics card's memory, and saves a PNG.

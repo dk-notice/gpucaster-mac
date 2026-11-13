@@ -93,6 +93,8 @@ public:
     uint32_t NewRandomSeed() { return nrand(); }
 
     void SetLightDir(int i, float3 dir);
+    // Points light i along 'dir' (the way the light travels) and rebuilds its axes.
+    void SetLightDirection(int i, float3 dir);
     void RandomizeLightColor(int i);
     void RandomizeLightDir(int i);
     void RandomizeLight(int i, float strength);

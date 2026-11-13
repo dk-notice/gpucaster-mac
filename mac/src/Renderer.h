@@ -58,6 +58,10 @@ extern NSString *const kVizModeNames[kNumVizModes];
 @property (nonatomic) BOOL paused;            // hold the work without losing it
 - (void)refineMore;                           // more ambient passes on a finished picture
 
+// Shows the picture lit by one light alone (0-based), or -1 for all of them.
+// Only what is displayed changes; the scene itself is untouched.
+@property (nonatomic) int soloLight;
+
 // --- Mouse ------------------------------------------------------------------
 // What dragging moves: -1 = camera, 0..MAX_LIGHTS-1 = that light, 9 = all lights.
 @property (nonatomic) int mouseTarget;

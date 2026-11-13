@@ -174,6 +174,17 @@ void SceneState::SetLightDir(int i, float3 dir) {
     cb.g_light_dir[i] = make4(dir, 0);
 }
 
+void SceneState::SetLightDirection(int i, float3 dir) {
+    if (!IsALight(i) || simd_length(dir) < 1e-6f) return;
+    Frame &L = lights[i];
+    L.z = simd_normalize(dir);
+    // Any axis that isn't parallel to the light's direction will do as "up".
+    float3 up = (fabsf(L.z.y) > 0.999f) ? simd_make_float3(1, 0, 0) : simd_make_float3(0, 1, 0);
+    L.x = simd_normalize(simd_cross(up, L.z));
+    L.y = simd_normalize(simd_cross(L.z, L.x));
+    cb.g_light_dir[i] = make4(L.z, 0);
+}
+
 void SceneState::RandomizeLightColor(int i) {
     if (!IsALight(i)) return;
     float b = frand(), g = frand(), r = frand();

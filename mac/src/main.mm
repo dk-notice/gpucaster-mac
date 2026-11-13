@@ -8,6 +8,7 @@
 #import <UniformTypeIdentifiers/UniformTypeIdentifiers.h>
 #import "Renderer.h"
 #import "Sidebar.h"
+#import "LightControls.h"
 
 #pragma mark - Picture view
 
@@ -313,6 +314,7 @@
     [_renderer reloadShadersIfFilesChanged];
     [self refreshShapePopup];
     [_sidebar syncShapeParams];
+    if (!_sidebar.hidden) [_sidebar syncLights];
     _status.stringValue = [_renderer statusText];
 
     // One button: pause while working, resume when paused, refine when finished.
@@ -1232,6 +1234,55 @@ static int RunSelfTest(NSString *outDir) {
             failures++;
         }
         unsetenv("GPUCASTER_USER_SHAPES");
+    }
+
+    // Lights: directions set from the camera's point of view read back the
+    // same, are described in plain words, and "solo" changes only the display.
+    if (defaultShape) {
+        SceneState *sc = r.scene;
+        SceneState::Snapshot keep = sc->GetSnapshot();
+        int bad = 0;
+        sc->camera.RotateOnY(0.7f);   // an arbitrary camera, so view and world directions differ
+        sc->camera.RotateOnX(-0.4f);
+        struct { simd_float3 dir; const char *words; } cases[] = {
+            {{-0.69f, 0.69f, -0.2f}, "Upper left, side-on"},
+            {{0, 0, -1}, "Straight on"},
+            {{0, 0, 1}, "Directly behind"},
+            {{0.9f, 0, 0.44f}, "Right, behind"},
+            {{0, -1, 0}, "Below, side-on"},
+            {{0.5f, 0.6f, -0.62f}, "Upper right, in front"},
+        };
+        for (auto &c : cases) {
+            simd_float3 want = simd_normalize(c.dir);
+            SetLightDirectionInView(sc, 1, want);
+            simd_float3 got = LightDirectionInView(sc, 1);
+            NSString *words = DescribeLightDirection(got);
+            if (simd_distance(want, got) > 1e-4f || ![words isEqualToString:@(c.words)]) {
+                fprintf(stderr, "selftest: light direction (%.2f %.2f %.2f) read back as (%.2f %.2f %.2f), \"%s\" (wanted \"%s\")\n",
+                        want.x, want.y, want.z, got.x, got.y, got.z, words.UTF8String, c.words);
+                bad++;
+            }
+        }
+        // A light pointing straight along the world's up axis must not break.
+        sc->SetLightDirection(2, simd_make_float3(0, 1, 0));
+        if (!isfinite(simd_length(sc->lights[2].x)) || !isfinite(simd_length(sc->lights[2].y))) bad++;
+        sc->RestoreSnapshot(keep);
+        [r sceneReplaced];
+        [r runPasses:10];
+        [r setStage:GenNormals];
+        [r runPasses:2];
+        NSString *allPath = [outDir stringByAppendingPathComponent:@"6_all_lights.png"];
+        NSString *soloPath = [outDir stringByAppendingPathComponent:@"6_light_1_alone.png"];
+        Uniforms before = sc->cb;
+        [r saveImageToPNG:allPath];
+        r.soloLight = 0;
+        [r saveImageToPNG:soloPath];
+        r.soloLight = -1;
+        bool differ = ![[NSData dataWithContentsOfFile:allPath] isEqualToData:[NSData dataWithContentsOfFile:soloPath]];
+        bool untouched = memcmp(before.g_light_col, sc->cb.g_light_col, sizeof(before.g_light_col)) == 0;
+        if (!differ || !untouched) { fprintf(stderr, "selftest: solo light wrong (%d %d)\n", differ, untouched); bad++; }
+        printf("selftest: lights, %d problems\n", bad);
+        if (bad) failures++;
     }
 
     // Every shape in the shapes folder must compile.

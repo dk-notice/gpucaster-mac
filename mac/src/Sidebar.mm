@@ -1,11 +1,11 @@
 #import "Sidebar.h"
+#import "LightControls.h"
 
 static const CGFloat kSidebarWidth = 300;
 static const CGFloat kSideMargin = 12;
 static const NSInteger kShapeTagBase = 10000;
 static const int kHistorySlots = 12;       // recent lightings shown
 static const int kHistoryPerRow = 4;
-static const int kNumEditableLights = 5;   // the shaders light the scene with the first five
 
 // A view whose origin is at the top-left, so scrolled content starts at the top.
 @interface FlippedView : NSView
@@ -56,8 +56,13 @@ typedef NS_ENUM(int, ChangeKind) {
     NSInteger _shapeParamsSeen;   // which version of the renderer's list is on screen
     NSMutableArray<NSButton *> *_historyButtons;
     NSPopUpButton *_vizPopup;
-    NSPopUpButton *_mousePopup;
-    NSPopUpButton *_lightPopup;
+    LightBallView *_ball;                         // where each light shines from
+    NSMutableArray<NSView *> *_lightRows;         // one row per light: on/off, swatch, description
+    NSMutableArray<NSButton *> *_lightToggles;
+    NSMutableArray<NSView *> *_lightSwatches;
+    NSMutableArray<NSButton *> *_lightNames;
+    NSTextField *_selectedLightTitle;
+    f4 _colorBeforeOff[kNumEditableLights];       // so switching a light back on restores it
     NSColorWell *_lightColor;
     NSButton *_lightSpec;
     NSColorWell *_fogColor;
@@ -274,8 +279,6 @@ static void ColorInto(NSColor *color, f4 *out) {
     NSMutableArray *vizNames = [NSMutableArray array];
     for (int i = 0; i < kNumVizModes; i++) [vizNames addObject:kVizModeNames[i]];
     _vizPopup = [self addPopup:@"Show" items:vizNames action:@selector(vizChanged:)];
-    _mousePopup = [self addPopup:@"Mouse moves" items:@[@"Camera", @"Selected light", @"All lights"]
-                          action:@selector(mouseTargetChanged:)];
     [self addSlider:@"Brightness" min:0 max:5 kind:ChangeRelight SCENE_VALUE(cb.kLightScale)];
     [self addSlider:@"Saturation" min:0 max:4 kind:ChangeRelight SCENE_VALUE(cb.kLightSat)];
 
@@ -291,10 +294,73 @@ static void ColorInto(NSColor *color, f4 *out) {
 
     // ---- Lights ----
     [self addSection:@"Lights"];
-    NSMutableArray *lightNames = [NSMutableArray array];
-    for (int i = 0; i < kNumEditableLights; i++) [lightNames addObject:[NSString stringWithFormat:@"Light %d", i + 1]];
-    _lightPopup = [self addPopup:@"Selected light" items:lightNames action:@selector(lightSelected:)];
+
+    // The ball: a stand-in for the scene, with a dot where each light shines from.
+    _ball = [[LightBallView alloc] initWithFrame:NSMakeRect(0, 0, 132, 132)];
+    _ball.renderer = _renderer;
+    _ball.onSelect = ^(int light) { weakSelf.selectedLight = light; };
+    _ball.onWillChange = ^{ [weakSelf noteChange:@"Light direction"]; };
+    _ball.onChanged = ^{ [weakSelf syncLights]; };
+    NSTextField *ballHelp = [NSTextField wrappingLabelWithString:
+        @"Each dot is a light, placed where it shines from as you look at the scene.\n\n"
+         "Solid: lights the front.\nHollow: shines from behind.\n\n"
+         "Drag a dot to move a light. Double-click to flip it front or behind."];
+    ballHelp.font = [NSFont systemFontOfSize:10];
+    ballHelp.textColor = NSColor.tertiaryLabelColor;
+    NSStackView *ballRow = [NSStackView stackViewWithViews:@[_ball, ballHelp]];
+    ballRow.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+    ballRow.alignment = NSLayoutAttributeCenterY;
+    ballRow.spacing = 8;
+    [self addRow:ballRow];
+
+    // One row per light.
+    _lightRows = [NSMutableArray array];
+    _lightToggles = [NSMutableArray array];
+    _lightSwatches = [NSMutableArray array];
+    _lightNames = [NSMutableArray array];
+    for (int i = 0; i < kNumEditableLights; i++) {
+        NSButton *toggle = [NSButton checkboxWithTitle:@"" target:self action:@selector(lightToggled:)];
+        toggle.controlSize = NSControlSizeSmall;
+        toggle.tag = i;
+        toggle.toolTip = @"Switch this light on or off";
+
+        NSView *swatch = [NSView new];
+        swatch.wantsLayer = YES;
+        swatch.layer.cornerRadius = 4;
+        swatch.layer.borderWidth = 1;
+        swatch.layer.borderColor = [NSColor colorWithWhite:0.5 alpha:0.6].CGColor;
+        [swatch.widthAnchor constraintEqualToConstant:18].active = YES;
+        [swatch.heightAnchor constraintEqualToConstant:14].active = YES;
+
+        NSButton *name = [NSButton buttonWithTitle:@"" target:self action:@selector(lightRowClicked:)];
+        name.bordered = NO;
+        name.alignment = NSTextAlignmentLeft;
+        name.font = [NSFont systemFontOfSize:11];
+        name.tag = i;
+        [name setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
+
+        NSStackView *row = [NSStackView stackViewWithViews:@[toggle, swatch, name]];
+        row.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        row.spacing = 6;
+        row.edgeInsets = NSEdgeInsetsMake(2, 4, 2, 4);
+        row.wantsLayer = YES;
+        row.layer.cornerRadius = 5;
+        [self addRow:row];
+        [_lightRows addObject:row];
+        [_lightToggles addObject:toggle];
+        [_lightSwatches addObject:swatch];
+        [_lightNames addObject:name];
+    }
+
+    // Settings for whichever light is selected.
+    _selectedLightTitle = [self label:@"" bold:NO];
+    _selectedLightTitle.textColor = NSColor.labelColor;
+    [_stack setCustomSpacing:10 afterView:_lightRows.lastObject];
+    [_target addArrangedSubview:_selectedLightTitle];
     _lightColor = [self addColorWell:@"Colour" action:@selector(lightColorChanged:)];
+    [self addSlider:@"Brightness" min:0 max:2 kind:ChangeRelight
+                get:^float { return LightBrightness(weakSelf.scene, weakSelf.selectedLight); }
+                set:^(float v) { [weakSelf setSelectedLightBrightness:v]; }].name = @"Light brightness";
     [self addSlider:@"Wrap" min:0 max:1 kind:ChangeRelight
                 get:^float { return weakSelf.scene->cb.g_light_wrap[weakSelf.selectedLight].x; }
                 set:^(float v) { weakSelf.scene->cb.g_light_wrap[weakSelf.selectedLight].x = v; }];
@@ -303,6 +369,14 @@ static void ColorInto(NSColor *color, f4 *out) {
         [self button:@"Random colour" action:@selector(randomLightColor:)],
         [self button:@"Random direction" action:@selector(randomLightDir:)],
     ]];
+    HoldButton *solo = [HoldButton buttonWithTitle:@"Hold to see this light alone" target:nil action:nil];
+    solo.controlSize = NSControlSizeSmall;
+    solo.font = [NSFont systemFontOfSize:11];
+    solo.onPress = ^{ renderer.soloLight = weakSelf.selectedLight; };
+    solo.onRelease = ^{ renderer.soloLight = -1; };
+    [_target addArrangedSubview:solo];
+    [_stack setCustomSpacing:12 afterView:solo];
+
     [self addButtons:@[
         [self button:@"Randomize all lighting" action:@selector(randomAll:)],
         [self button:@"Keep current" action:@selector(keepLighting:)],
@@ -455,10 +529,8 @@ static void ColorInto(NSColor *color, f4 *out) {
     for (SliderEntry *e in _entries) [e refresh];
     for (SliderEntry *e in _shapeEntries) [e refresh];
     [_vizPopup selectItemAtIndex:(NSInteger)s->cb.g_viz_mode];
-    [_lightPopup selectItemAtIndex:_selectedLight];
-    int target = _renderer.mouseTarget;
-    [_mousePopup selectItemAtIndex:(target == -1) ? 0 : (target == 9) ? 2 : 1];
-    _lightColor.color = ColorFrom(s->cb.g_light_col[_selectedLight]);
+    [self syncLights];
+    _lightColor.color = LightDisplayColor(s, _selectedLight);
     _lightSpec.state = s->cb.g_light_spec_enabled[_selectedLight].x ? NSControlStateValueOn : NSControlStateValueOff;
     _fogColor.color = ColorFrom(s->cb.g_fog_color);
     _amboDirectional.state = s->cb.kLightUseDirectionalAmbo ? NSControlStateValueOn : NSControlStateValueOff;
@@ -479,17 +551,68 @@ static void ColorInto(NSColor *color, f4 *out) {
 
 - (void)vizChanged:(NSPopUpButton *)p { [_renderer setVizMode:(int)p.indexOfSelectedItem]; }
 
-- (void)mouseTargetChanged:(NSPopUpButton *)p {
-    NSInteger i = p.indexOfSelectedItem;
-    _renderer.mouseTarget = (i == 0) ? -1 : (i == 2) ? 9 : _selectedLight;
+// Brings the ball and the list of lights up to date.  Cheap; called often,
+// because the descriptions change as the camera moves.
+- (void)syncLights {
+    SceneState *s = self.scene;
+    for (int i = 0; i < kNumEditableLights; i++) {
+        BOOL on = LightBrightness(s, i) >= 0.002f;
+        NSString *where = DescribeLightDirection(LightDirectionInView(s, i));
+        NSString *title = on ? where : [where stringByAppendingString:@"  (off)"];
+        if (![_lightNames[(NSUInteger)i].title isEqualToString:title]) _lightNames[(NSUInteger)i].title = title;
+        _lightNames[(NSUInteger)i].contentTintColor = on ? NSColor.labelColor : NSColor.tertiaryLabelColor;
+        _lightToggles[(NSUInteger)i].state = on ? NSControlStateValueOn : NSControlStateValueOff;
+        _lightSwatches[(NSUInteger)i].layer.backgroundColor = LightDisplayColor(s, i).CGColor;
+        _lightRows[(NSUInteger)i].layer.backgroundColor =
+            (i == _selectedLight) ? [NSColor.selectedContentBackgroundColor colorWithAlphaComponent:0.35].CGColor : NSColor.clearColor.CGColor;
+    }
+    _selectedLightTitle.stringValue = [NSString stringWithFormat:@"Selected: %@",
+        [DescribeLightDirection(LightDirectionInView(s, _selectedLight)) lowercaseString]];
+    if (_ball.selectedLight != _selectedLight) _ball.selectedLight = _selectedLight;
+    _ball.needsDisplay = YES;
 }
 
-- (void)lightSelected:(NSPopUpButton *)p { self.selectedLight = (int)p.indexOfSelectedItem; }
+- (void)lightRowClicked:(NSButton *)b { self.selectedLight = (int)b.tag; }
+
+// Brightness is the strongest colour channel; changing it keeps the hue.
+- (void)setSelectedLightBrightness:(float)v {
+    f4 &c = self.scene->cb.g_light_col[_selectedLight];
+    float m = LightBrightness(self.scene, _selectedLight);
+    if (m < 0.002f) c = simd_make_float4(v, v, v, c.w);   // was off: comes back white
+    else c = simd_make_float4(c.x * v / m, c.y * v / m, c.z * v / m, c.w);
+    [self syncLights];
+    _lightColor.color = LightDisplayColor(self.scene, _selectedLight);
+}
+
+- (void)lightToggled:(NSButton *)b {
+    int i = (int)b.tag;
+    [self noteChange:nil];
+    f4 &c = self.scene->cb.g_light_col[i];
+    if (b.state == NSControlStateValueOn) {
+        f4 back = _colorBeforeOff[i];
+        if (MAX(back.x, MAX(back.y, back.z)) < 0.002f) back = simd_make_float4(0.6f, 0.6f, 0.6f, 1);
+        c = back;
+    } else {
+        _colorBeforeOff[i] = c;
+        c = simd_make_float4(0, 0, 0, c.w);
+    }
+    _selectedLight = i;
+    [self changed];
+}
 
 - (void)lightColorChanged:(NSColorWell *)w {
     [self noteChange:@"Light colour"];
-    ColorInto(w.color, &self.scene->cb.g_light_col[_selectedLight]);
+    // The well sets the hue; the Brightness slider sets how strong it is.
+    float brightness = LightBrightness(self.scene, _selectedLight);
+    if (brightness < 0.002f) brightness = 0.6f;
+    f4 picked = simd_make_float4(0, 0, 0, 0);
+    ColorInto(w.color, &picked);
+    float m = MAX(picked.x, MAX(picked.y, picked.z));
+    f4 &c = self.scene->cb.g_light_col[_selectedLight];
+    if (m < 0.002f) c = simd_make_float4(0, 0, 0, c.w);
+    else c = simd_make_float4(picked.x / m * brightness, picked.y / m * brightness, picked.z / m * brightness, c.w);
     [_renderer relight];
+    [self refresh];
 }
 
 - (void)lightSpecChanged:(NSButton *)b {
