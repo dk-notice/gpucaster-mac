@@ -1,0 +1,18 @@
+.DS_Store
+mac/build/
+
+# The original Windows release (Ryan Geiss's code and Microsoft's DirectX SDK
+# files) lives alongside the port on disk but is not part of this repository.
+/bin/
+/code/
+/d3d11/
+/shaders/
+/textures/
+/scenes/
+/screenshots/
+/gpucaster.sln
+/gpucaster_tile_size_*.bat
+/tutorial.txt
+
+# Reference captures from the Windows version.
+/reference/
