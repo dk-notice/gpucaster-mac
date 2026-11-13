@@ -4,7 +4,17 @@
 #import <Cocoa/Cocoa.h>
 #import "Renderer.h"
 
+// Diagnostic log, for tracking down problems that only show with a real mouse.
+// Lines are appended to ~/Library/Logs/Gpucaster/debug.log.  Does nothing
+// unless switched on with GCLogEnable().
+void GCLogEnable(void);
+void GCLog(NSString *format, ...) NS_FORMAT_FUNCTION(1, 2);
+NSString *GCLogPath(void);
+
 @interface Sidebar : NSView
+
+// A short description of a view for the log ("slider Wrap", "button Random colour").
+- (NSString *)describeView:(NSView *)view;
 
 - (instancetype)initWithRenderer:(Renderer *)renderer;
 

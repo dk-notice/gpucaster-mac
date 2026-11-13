@@ -186,6 +186,26 @@
         [body.widthAnchor constraintEqualToAnchor:root.widthAnchor],
     ]];
 
+    // Diagnostic log (see Sidebar.h): on when the app is run from its source
+    // folder, or when GPUCASTER_LOG is set.  Records every mouse press with
+    // what it landed on, so problems that need a real mouse can be traced.
+    if (getenv("GPUCASTER_LOG") || ![_renderer shapeIsReadOnly:[_renderer.shaderDir stringByAppendingPathComponent:@"gpucaster.metal"]]) {
+        GCLogEnable();
+        GCLog(@"Gpucaster started; shaders from %@", _renderer.shaderDir);
+        [NSEvent addLocalMonitorForEventsMatchingMask:(NSEventMaskLeftMouseDown | NSEventMaskLeftMouseUp)
+                                              handler:^NSEvent *(NSEvent *e) {
+            AppDelegate *me = weakSelf;
+            if (!me) return e;
+            NSView *hit = e.window ? [e.window.contentView hitTest:e.locationInWindow] : nil;
+            NSString *what = (e.window == me->_window) ? [me->_sidebar describeView:hit]
+                                                       : [NSString stringWithFormat:@"%@ in window \"%@\"", NSStringFromClass([hit class]), e.window.title];
+            GCLog(@"mouse %@ at (%.0f, %.0f) on %@; key window \"%@\"; first responder %@",
+                  e.type == NSEventTypeLeftMouseDown ? @"DOWN" : @"up", e.locationInWindow.x, e.locationInWindow.y, what,
+                  NSApp.keyWindow.title, NSStringFromClass([me->_window.firstResponder class]));
+            return e;
+        }];
+    }
+
     [self buildMenus];
     [_window center];
     [_window makeKeyAndOrderFront:nil];

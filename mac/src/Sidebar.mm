@@ -7,6 +7,34 @@ static const NSInteger kShapeTagBase = 10000;
 static const int kHistorySlots = 12;       // recent lightings shown
 static const int kHistoryPerRow = 4;
 
+#pragma mark - Diagnostic log
+
+static FILE *gLogFile = NULL;
+static CFTimeInterval gLogStart = 0;
+
+NSString *GCLogPath(void) {
+    return [NSHomeDirectory() stringByAppendingPathComponent:@"Library/Logs/Gpucaster/debug.log"];
+}
+
+void GCLogEnable(void) {
+    if (gLogFile) return;
+    NSString *path = GCLogPath();
+    [[NSFileManager defaultManager] createDirectoryAtPath:[path stringByDeletingLastPathComponent]
+                              withIntermediateDirectories:YES attributes:nil error:nil];
+    gLogFile = fopen(path.fileSystemRepresentation, "w");   // a fresh log each launch
+    gLogStart = CACurrentMediaTime();
+}
+
+void GCLog(NSString *format, ...) {
+    if (!gLogFile) return;
+    va_list args;
+    va_start(args, format);
+    NSString *line = [[NSString alloc] initWithFormat:format arguments:args];
+    va_end(args);
+    fprintf(gLogFile, "%8.3f  %s\n", CACurrentMediaTime() - gLogStart, line.UTF8String);
+    fflush(gLogFile);
+}
+
 // A view whose origin is at the top-left, so scrolled content starts at the top.
 @interface FlippedView : NSView
 @end
@@ -160,9 +188,36 @@ typedef NS_ENUM(int, ChangeKind) {
     return e;
 }
 
+- (NSString *)describeView:(NSView *)view {
+    if (!view) return @"nothing";
+    for (NSView *v = view; v; v = v.superview) {
+        if ([v isKindOfClass:[NSSlider class]]) {
+            for (SliderEntry *e in [_entries arrayByAddingObjectsFromArray:_shapeEntries])
+                if (e.slider == v) return [NSString stringWithFormat:@"slider \"%@\" (tag %ld, enabled %d)", e.name, (long)e.slider.tag, e.slider.enabled];
+            return @"slider (unknown)";
+        }
+        if ([v isKindOfClass:[NSButton class]]) return [NSString stringWithFormat:@"%@ \"%@\"", NSStringFromClass([v class]), ((NSButton *)v).title];
+        if ([v isKindOfClass:[NSControl class]]) return NSStringFromClass([v class]);
+    }
+    return [NSString stringWithFormat:@"%@ (inside %@)", NSStringFromClass([view class]), NSStringFromClass([view.superview class])];
+}
+
 - (void)sliderMoved:(NSSlider *)slider {
     SliderEntry *e = (slider.tag >= kShapeTagBase) ? _shapeEntries[(NSUInteger)(slider.tag - kShapeTagBase)]
                                                    : _entries[(NSUInteger)slider.tag];
+    {
+        float before = e.get();
+        GCLog(@"slider \"%@\" moved to %.3f (scene had %.3f; selected light %d; solo %d; picker open %d; event %@)", e.name,
+              slider.floatValue, before, _selectedLight + 1, _renderer.soloLight + 1, NSColorPanel.sharedColorPanelExists && NSColorPanel.sharedColorPanel.visible,
+              NSApp.currentEvent ? @(NSApp.currentEvent.type) : @"none");
+        // Shortly afterwards, record whether the change stuck.
+        __weak Sidebar *weakSelf = self;
+        float wanted = slider.floatValue;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, (int64_t)(0.4 * NSEC_PER_SEC)), dispatch_get_main_queue(), ^{
+            if (!weakSelf) return;
+            GCLog(@"   0.4 s later: slider \"%@\" shows %.3f, scene has %.3f (was set to %.3f)", e.name, e.slider.floatValue, e.get(), wanted);
+        });
+    }
     [self noteChange:e.name];
     float v = e.integer ? roundf(slider.floatValue) : slider.floatValue;
     e.set(v);
@@ -383,8 +438,8 @@ static void ColorInto(NSColor *color, f4 *out) {
     HoldButton *solo = [HoldButton buttonWithTitle:@"Hold to see this light alone" target:nil action:nil];
     solo.controlSize = NSControlSizeSmall;
     solo.font = [NSFont systemFontOfSize:11];
-    solo.onPress = ^{ renderer.soloLight = weakSelf.selectedLight; };
-    solo.onRelease = ^{ renderer.soloLight = -1; };
+    solo.onPress = ^{ GCLog(@"solo pressed"); renderer.soloLight = weakSelf.selectedLight; };
+    solo.onRelease = ^{ GCLog(@"solo released"); renderer.soloLight = -1; };
     [_target addArrangedSubview:solo];
     [_stack setCustomSpacing:12 afterView:solo];
 
@@ -690,6 +745,7 @@ static void ColorInto(NSColor *color, f4 *out) {
 #pragma mark - Refresh
 
 - (void)refresh {
+    GCLog(@"sidebar refresh (selected light %d)", _selectedLight + 1);
     SceneState *s = self.scene;
     [self syncShapeParams];
     for (SliderEntry *e in _entries) [e refresh];
@@ -703,6 +759,7 @@ static void ColorInto(NSColor *color, f4 *out) {
 }
 
 - (void)setSelectedLight:(int)selectedLight {
+    GCLog(@"select light %d (was %d)", selectedLight + 1, _selectedLight + 1);
     _selectedLight = MIN(MAX(selectedLight, 0), kNumEditableLights - 1);
     if (_renderer.mouseTarget >= 0 && _renderer.mouseTarget < MAX_LIGHTS) _renderer.mouseTarget = _selectedLight;
     [self refresh];
@@ -752,6 +809,7 @@ static void ColorInto(NSColor *color, f4 *out) {
 
 - (void)lightToggled:(NSButton *)b {
     int i = (int)b.tag;
+    GCLog(@"light %d switched %@", i + 1, b.state == NSControlStateValueOn ? @"on" : @"off");
     [self noteChange:nil];
     f4 &c = self.scene->cb.g_light_col[i];
     if (b.state == NSControlStateValueOn) {
@@ -769,7 +827,11 @@ static void ColorInto(NSColor *color, f4 *out) {
 // The colour picker sets the light's colour exactly as picked, brightness
 // included.  The Brightness slider can then push it brighter than a picker can.
 - (void)lightColorChanged:(NSColorWell *)w {
-    if (CACurrentMediaTime() < _ignoreWellsUntil) return;   // the echo of a colour the app itself just showed
+    if (CACurrentMediaTime() < _ignoreWellsUntil) {   // the echo of a colour the app itself just showed
+        GCLog(@"light colour well: change ignored (echo)");
+        return;
+    }
+    GCLog(@"light colour well: new colour for light %d", _selectedLight + 1);
     _colorActionCount++;
     [self noteChange:@"Light colour"];
     ColorInto(w.color, &self.scene->cb.g_light_col[_selectedLight]);
