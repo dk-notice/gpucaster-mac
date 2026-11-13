@@ -33,6 +33,12 @@
 @property (nonatomic, copy) void (^onPickLighting)(NSInteger index);   // one was clicked
 @property (nonatomic, copy) void (^onKeepLighting)(void);              // "Keep current" was clicked
 
+// For testing without a person: moves every slider through the same path a
+// mouse drag takes and checks the scene value follows, and checks that each
+// visible control is the thing a click at its centre would land on.
+// Returns a report; lines starting "PROBLEM" are failures.
+- (NSString *)checkControls;
+
 // Which light the "Light" section edits (0-based).
 @property (nonatomic) int selectedLight;
 

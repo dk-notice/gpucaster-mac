@@ -211,6 +211,15 @@
         });
     }
 
+    // For testing the controls without a person: GPUCASTER_UICHECK=1 exercises
+    // every sidebar control a few seconds after launch, prints a report and quits.
+    if (getenv("GPUCASTER_UICHECK")) {
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            printf("%s", [self->_sidebar checkControls].UTF8String);
+            [NSApp terminate:nil];
+        });
+    }
+
     const char *shot = getenv("GPUCASTER_UISHOT");
     if (shot && *shot) {
         NSString *path = [NSString stringWithUTF8String:shot];

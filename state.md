@@ -96,7 +96,9 @@ and an Apple silicon Mac.
 
 Testing aids (environment variables): `GPUCASTER_SHAPE=name` or a full path chooses
 the shape; `GPUCASTER_UISHOT=path` saves a picture of the window's controls after 4
-seconds and quits; `GPUCASTER_EXPORT=path` with optional `GPUCASTER_EXPORT_SCALE=n`
+seconds and quits; `GPUCASTER_UICHECK=1` drives every sidebar slider through its
+handler, checks nothing overlaps the visible controls, exercises the colour picker,
+prints a report and quits; `GPUCASTER_EXPORT=path` with optional `GPUCASTER_EXPORT_SCALE=n`
 runs a large export through the app and quits. Screen capture is not permitted for
 the assistant on this Mac, which is why the layout snapshot exists.
 
@@ -133,8 +135,9 @@ the assistant on this Mac, which is why the layout snapshot exists.
   dodecahedron with the app and masks it to the standard rounded square.
 - Lights have a direction but no position (as in the original), so they are shown
   on a direction ball and described in words, not drawn in the 3D picture.
-- A light's brightness is its strongest colour channel. The colour well sets hue
-  only; the scene file format is unchanged.
+- A light's brightness is its strongest colour channel. The colour picker sets the
+  colour exactly as picked (brightness included); the Brightness slider can then go
+  beyond what a picker can show, up to 2. The scene file format is unchanged.
 - The sidebar's "Mouse moves" pop-up is gone; dragging lights in the picture is still
   available from the Lighting menu and keys 0, 1-5 and 9, and the status line says
   when it is on.
@@ -152,6 +155,17 @@ the assistant on this Mac, which is why the layout snapshot exists.
   tile budget learned on a cheap shape could make an expensive one draw a whole pass
   in a single frame, stalling the app. Both fixed; the first has a test. The user
   confirmed shape switching works afterwards.
+
+- Lights controls (reported by the user, 2026-11-12): the colour picker's sliders
+  did not work, and the per-light Brightness and Wrap sliders did not work. Found
+  and fixed: the light's colour well ignored the brightness chosen in the picker and
+  wrote a changed colour back into the well while the picker was open, so the picker
+  fought the app. The picker now sets the light's colour exactly, and the app never
+  echoes colours back. NOT explained: why Brightness and Wrap failed. Driven through
+  the same handler a drag uses they work for every light, with and without the
+  picker open, and nothing overlaps them. A simulated mouse could not be made to
+  work on this Mac, so real drags are untested. Waiting on the user to say whether
+  they work now and, if not, what exactly happens.
 
 ## Known gaps
 

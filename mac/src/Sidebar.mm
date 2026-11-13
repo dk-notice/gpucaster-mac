@@ -63,6 +63,8 @@ typedef NS_ENUM(int, ChangeKind) {
     NSMutableArray<NSButton *> *_lightNames;
     NSTextField *_selectedLightTitle;
     f4 _colorBeforeOff[kNumEditableLights];       // so switching a light back on restores it
+    int _colorActionCount;                        // for testing: times a colour well reported a change
+    CFTimeInterval _ignoreWellsUntil;             // briefly ignore the echo after the app itself sets a well
     NSColorWell *_lightColor;
     NSButton *_lightSpec;
     NSColorWell *_fogColor;
@@ -219,6 +221,14 @@ typedef NS_ENUM(int, ChangeKind) {
     [_target addArrangedSubview:note];
 }
 
+// The colour to show in a light's colour well.  A light can be brighter than
+// any colour a picker can show, so above full brightness only the hue is shown.
+static NSColor *LightWellColor(SceneState *scene, int i) {
+    f4 c = scene->cb.g_light_col[i];
+    float m = MAX(1.0f, MAX(c.x, MAX(c.y, c.z)));
+    return [NSColor colorWithSRGBRed:MAX(c.x, 0) / m green:MAX(c.y, 0) / m blue:MAX(c.z, 0) / m alpha:1];
+}
+
 static NSColor *ColorFrom(f4 c) {
     return [NSColor colorWithSRGBRed:MIN(MAX(c.x, 0), 1) green:MIN(MAX(c.y, 0), 1) blue:MIN(MAX(c.z, 0), 1) alpha:1];
 }
@@ -305,6 +315,7 @@ static void ColorInto(NSColor *color, f4 *out) {
         @"Each dot is a light, placed where it shines from as you look at the scene.\n\n"
          "Solid: lights the front.\nHollow: shines from behind.\n\n"
          "Drag a dot to move a light. Double-click to flip it front or behind."];
+    ballHelp.selectable = NO;   // (wrapping labels are selectable by default, which would steal key presses)
     ballHelp.font = [NSFont systemFontOfSize:10];
     ballHelp.textColor = NSColor.tertiaryLabelColor;
     NSStackView *ballRow = [NSStackView stackViewWithViews:@[_ball, ballHelp]];
@@ -517,6 +528,161 @@ static void ColorInto(NSColor *color, f4 *out) {
     if (self.onKeepLighting) self.onKeepLighting();
 }
 
+- (void)collectControlsIn:(NSView *)view into:(NSMutableArray<NSControl *> *)out {
+    for (NSView *sub in view.subviews) {
+        if ([sub isKindOfClass:[NSSlider class]] || [sub isKindOfClass:[NSButton class]] ||
+            [sub isKindOfClass:[NSPopUpButton class]] || [sub isKindOfClass:[NSColorWell class]])
+            [out addObject:(NSControl *)sub];
+        else
+            [self collectControlsIn:sub into:out];
+    }
+}
+
+- (NSString *)checkControls {
+    NSMutableString *report = [NSMutableString string];
+    int problems = 0;
+
+    // 1. Each slider, driven the way a drag drives it.
+    NSArray<SliderEntry *> *all = [_entries arrayByAddingObjectsFromArray:_shapeEntries];
+    for (SliderEntry *e in all) {
+        float old = e.get();
+        float lo = (float)e.slider.minValue, hi = (float)e.slider.maxValue;
+        float v = lo + 0.37f * (hi - lo);
+        if (e.integer) v = roundf(v);
+        e.slider.floatValue = v;
+        [self sliderMoved:e.slider];
+        float got = e.get();
+        float shown = e.slider.floatValue;
+        BOOL ok = fabsf(got - v) < 1e-3f * MAX(1.0f, fabsf(hi - lo)) && fabsf(shown - v) < 1e-3f * MAX(1.0f, fabsf(hi - lo));
+        if (!ok) {
+            problems++;
+            [report appendFormat:@"PROBLEM slider \"%@\": set %.3f, scene has %.3f, slider shows %.3f\n", e.name, v, got, shown];
+        }
+        e.slider.floatValue = old;
+        [self sliderMoved:e.slider];
+    }
+    [report appendFormat:@"%d sliders driven\n", (int)all.count];
+
+    // 1a. Brightness and Wrap for each light in turn: the value must stick
+    // after the app's regular housekeeping has run, and the picture must change.
+    {
+        auto spin = ^(double seconds) { [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]]; };
+        auto picture = ^NSData * {
+            std::vector<Lighting> one;
+            one.push_back(self.scene->GetLighting());
+            return [[self->_renderer thumbnailsForLightings:one width:160].firstObject TIFFRepresentation];
+        };
+        for (int light = 0; light < kNumEditableLights; light++) {
+            self.selectedLight = light;
+            spin(0.1);
+            for (SliderEntry *e in _entries) {
+                if (![e.name isEqualToString:@"Light brightness"] && ![e.name isEqualToString:@"Wrap"]) continue;
+                float old = e.get();
+                NSData *before = picture();
+                float hi = (float)e.slider.maxValue;
+                float v = (old > 0.5f * hi) ? 0.1f * hi : 0.9f * hi;
+                e.slider.floatValue = v;
+                [self sliderMoved:e.slider];
+                spin(0.6);
+                float got = e.get(), shown = e.slider.floatValue;
+                BOOL changed = ![before isEqualToData:picture()];
+                BOOL lit = LightBrightness(self.scene, light) >= 0.002f;
+                [report appendFormat:@"light %d %@: %.2f -> %.2f, scene %.2f, slider %.2f, picture %@\n", light + 1, e.name, old, v, got,
+                                     shown, changed ? @"changed" : @"UNCHANGED"];
+                if (fabsf(got - v) > 0.01f * hi || fabsf(shown - v) > 0.01f * hi || (lit && !changed)) {
+                    problems++;
+                    [report appendFormat:@"PROBLEM light %d slider \"%@\" did not take effect\n", light + 1, e.name];
+                }
+                e.slider.floatValue = old;
+                [self sliderMoved:e.slider];
+            }
+        }
+        self.selectedLight = 0;
+    }
+
+    // 1b. With the colour picker open on the light's colour: one change in the
+    // picker should be reported once, the light should take that colour, and
+    // the Brightness and Wrap sliders should still work.
+    {
+        auto spin = ^(double seconds) { [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:seconds]]; };
+        [_lightColor activate:YES];
+        spin(0.3);
+        _colorActionCount = 0;
+        NSColor *picked = [NSColor colorWithSRGBRed:0.2 green:0.4 blue:0.3 alpha:1];
+        [NSColorPanel sharedColorPanel].color = picked;
+        spin(0.7);
+        f4 c = self.scene->cb.g_light_col[_selectedLight];
+        NSColor *panelNow = [[NSColorPanel sharedColorPanel].color colorUsingColorSpace:NSColorSpace.sRGBColorSpace];
+        [report appendFormat:@"colour picker: %d change reports; light colour now (%.2f %.2f %.2f); picker shows (%.2f %.2f %.2f)\n",
+                             _colorActionCount, c.x, c.y, c.z, panelNow.redComponent, panelNow.greenComponent, panelNow.blueComponent];
+        if (_colorActionCount < 1 || _colorActionCount > 2) { problems++; [report appendString:@"PROBLEM one change in the colour picker should be reported once\n"]; }
+        if (fabsf(c.x - 0.2f) > 0.02f || fabsf(c.y - 0.4f) > 0.02f || fabsf(c.z - 0.3f) > 0.02f) {
+            problems++;
+            [report appendString:@"PROBLEM the light did not take the colour chosen in the picker\n"];
+        }
+        if (fabs(panelNow.redComponent - 0.2) > 0.02 || fabs(panelNow.greenComponent - 0.4) > 0.02 || fabs(panelNow.blueComponent - 0.3) > 0.02) {
+            problems++;
+            [report appendString:@"PROBLEM the picker did not keep the colour that was chosen in it\n"];
+        }
+        // A second, different pick straight afterwards must also arrive (the echo guard must not swallow it).
+        spin(0.3);
+        [NSColorPanel sharedColorPanel].color = [NSColor colorWithSRGBRed:0.9 green:0.1 blue:0.5 alpha:1];
+        spin(0.5);
+        c = self.scene->cb.g_light_col[_selectedLight];
+        if (fabsf(c.x - 0.9f) > 0.02f || fabsf(c.y - 0.1f) > 0.02f || fabsf(c.z - 0.5f) > 0.02f) {
+            problems++;
+            [report appendFormat:@"PROBLEM a second pick did not arrive: light colour is (%.2f %.2f %.2f)\n", c.x, c.y, c.z];
+        }
+        for (SliderEntry *e in _entries) {
+            if (![e.name isEqualToString:@"Light brightness"] && ![e.name isEqualToString:@"Wrap"]) continue;
+            float hi = (float)e.slider.maxValue;
+            float v = 0.81f * hi;
+            e.slider.floatValue = v;
+            [self sliderMoved:e.slider];
+            spin(0.4);
+            float got = e.get(), shown = e.slider.floatValue;
+            if (fabsf(got - v) > 0.01f * hi || fabsf(shown - v) > 0.01f * hi) {
+                problems++;
+                [report appendFormat:@"PROBLEM with the picker open, slider \"%@\": set %.3f, scene has %.3f, slider shows %.3f\n", e.name, v, got, shown];
+            }
+        }
+        [_lightColor deactivate];
+        [[NSColorPanel sharedColorPanel] orderOut:nil];
+    }
+
+    // 2. Each visible, enabled control must be what a click on it reaches.
+    NSMutableArray<NSControl *> *controls = [NSMutableArray array];
+    [self collectControlsIn:self into:controls];
+    int visible = 0;
+    for (NSControl *c in controls) {
+        NSRect r = NSIntersectionRect(c.bounds, c.visibleRect);   // the part not scrolled out of sight
+        if (c.hiddenOrHasHiddenAncestor || r.size.width < 2 || r.size.height < 2) continue;
+        visible++;
+        // Try several points across the control, not only its centre.
+        for (double f : {0.1, 0.3, 0.5, 0.7, 0.9}) {
+            NSPoint inWindow = [c convertPoint:NSMakePoint(NSMinX(r) + f * r.size.width, NSMidY(r)) toView:nil];
+            NSView *hit = [self.window.contentView hitTest:inWindow];
+            if (hit && (hit == c || [hit isDescendantOf:c])) continue;
+            problems++;
+            NSString *what = [c isKindOfClass:[NSButton class]] ? ((NSButton *)c).title : NSStringFromClass([c class]);
+            [report appendFormat:@"PROBLEM a click %.0f%% of the way across %@ \"%@\" (y %.0f) lands on %@ instead\n", f * 100,
+                                 NSStringFromClass([c class]), what, inWindow.y, hit ? NSStringFromClass([hit class]) : @"nothing"];
+            break;
+        }
+    }
+    [report appendFormat:@"%d visible controls hit-tested, %d problems\n", visible, problems];
+    return report;
+}
+
+// Shows a colour in a well.  If the colour picker is open on that well it is
+// updated too, and the "colour changed" message that comes back is ignored,
+// so the app and the picker never push colours back and forth.
+- (void)showColor:(NSColor *)color inWell:(NSColorWell *)well {
+    _ignoreWellsUntil = CACurrentMediaTime() + 0.2;
+    well.color = color;
+    if (well.isActive) [NSColorPanel sharedColorPanel].color = color;
+}
+
 - (void)toggleAdvanced:(NSButton *)b {
     _advanced.hidden = (b.state != NSControlStateValueOn);
 }
@@ -530,9 +696,9 @@ static void ColorInto(NSColor *color, f4 *out) {
     for (SliderEntry *e in _shapeEntries) [e refresh];
     [_vizPopup selectItemAtIndex:(NSInteger)s->cb.g_viz_mode];
     [self syncLights];
-    _lightColor.color = LightDisplayColor(s, _selectedLight);
+    [self showColor:LightWellColor(s, _selectedLight) inWell:_lightColor];
     _lightSpec.state = s->cb.g_light_spec_enabled[_selectedLight].x ? NSControlStateValueOn : NSControlStateValueOff;
-    _fogColor.color = ColorFrom(s->cb.g_fog_color);
+    [self showColor:ColorFrom(s->cb.g_fog_color) inWell:_fogColor];
     _amboDirectional.state = s->cb.kLightUseDirectionalAmbo ? NSControlStateValueOn : NSControlStateValueOff;
 }
 
@@ -581,7 +747,7 @@ static void ColorInto(NSColor *color, f4 *out) {
     if (m < 0.002f) c = simd_make_float4(v, v, v, c.w);   // was off: comes back white
     else c = simd_make_float4(c.x * v / m, c.y * v / m, c.z * v / m, c.w);
     [self syncLights];
-    _lightColor.color = LightDisplayColor(self.scene, _selectedLight);
+    [self showColor:LightWellColor(self.scene, _selectedLight) inWell:_lightColor];
 }
 
 - (void)lightToggled:(NSButton *)b {
@@ -600,19 +766,19 @@ static void ColorInto(NSColor *color, f4 *out) {
     [self changed];
 }
 
+// The colour picker sets the light's colour exactly as picked, brightness
+// included.  The Brightness slider can then push it brighter than a picker can.
 - (void)lightColorChanged:(NSColorWell *)w {
+    if (CACurrentMediaTime() < _ignoreWellsUntil) return;   // the echo of a colour the app itself just showed
+    _colorActionCount++;
     [self noteChange:@"Light colour"];
-    // The well sets the hue; the Brightness slider sets how strong it is.
-    float brightness = LightBrightness(self.scene, _selectedLight);
-    if (brightness < 0.002f) brightness = 0.6f;
-    f4 picked = simd_make_float4(0, 0, 0, 0);
-    ColorInto(w.color, &picked);
-    float m = MAX(picked.x, MAX(picked.y, picked.z));
-    f4 &c = self.scene->cb.g_light_col[_selectedLight];
-    if (m < 0.002f) c = simd_make_float4(0, 0, 0, c.w);
-    else c = simd_make_float4(picked.x / m * brightness, picked.y / m * brightness, picked.z / m * brightness, c.w);
+    ColorInto(w.color, &self.scene->cb.g_light_col[_selectedLight]);
     [_renderer relight];
-    [self refresh];
+    // Update what depends on the colour - but not the well or the picker, which the person is using.
+    [self syncLights];
+    for (SliderEntry *e in _entries) {
+        if ([e.name isEqualToString:@"Light brightness"]) [e refresh];
+    }
 }
 
 - (void)lightSpecChanged:(NSButton *)b {
@@ -622,6 +788,7 @@ static void ColorInto(NSColor *color, f4 *out) {
 }
 
 - (void)fogColorChanged:(NSColorWell *)w {
+    if (CACurrentMediaTime() < _ignoreWellsUntil) return;
     [self noteChange:@"Fog colour"];
     ColorInto(w.color, &self.scene->cb.g_fog_color);
     [_renderer relight];
