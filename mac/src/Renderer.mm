@@ -16,7 +16,15 @@ static NSString *const kShapeDefaultsKey = @"ShapePath";
 static NSString *const kUserShapesUsedKey = @"UserShapesFolderUsed";
 static NSString *const kUserShapesFolderName = @"Gpucaster Shapes";
 static const int kTileEdge = 128;             // pixels; the app decides how many tiles to draw per frame
-static const double kTargetGpuSeconds = 0.010;   // GPU time to spend per frame, to keep the app responsive
+// Work is handed to the graphics card in slices, one after another, so the
+// card is always busy.  Each slice aims to take this long.  Longer slices get
+// more done (every slice has a fixed cost), so they are long while nothing is
+// being touched, and short while the camera or a control is being moved, when
+// a quick response matters more.
+static const double kSliceSeconds = 0.030;
+static const double kSliceSecondsInteracting = 0.008;
+static const double kInteractingFor = 0.5;       // seconds after the last input that count as "moving"
+static const int kSlicesInFlight = 2;            // slices queued at once, so the card never waits for the next
 static const int kTileStride = 1280;          // bytes between tiles in the per-tile buffer (>= sizeof(TileUniforms))
 
 static const uint32_t CLEAR_GEOM = 1, CLEAR_NORM = 2, CLEAR_AMBO = 4, CLEAR_ALL = 0xFFFFFFFF;
@@ -84,6 +92,8 @@ struct IntersectionSet {
     int _width, _height;
     BOOL _relightWhole;
     BOOL _displayDirty;            // the window needs the picture copied to it again
+    int _slicesInFlight;           // work slices handed to the graphics card and not yet finished
+    CFTimeInterval _lastInput;     // when the camera, a light or a setting was last changed
     BOOL _autoActive;
     BOOL _autoFinishedMain;        // the automatic run completed the primary rays
     int _amboTarget;               // ambient passes to reach for the primary rays (grows with "refine more")
@@ -425,6 +435,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 }
 
 - (void)setValue:(float)value ofParam:(ShapeParam *)param {
+    _lastInput = CACurrentMediaTime();
     [self storeValue:value ofParam:param];
     [self clearAll];
 }
@@ -722,6 +733,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 }
 
 - (void)relight {
+    _lastInput = CACurrentMediaTime();
     _relightWhole = YES;
     [self startReflectionsIfWanted];
 }
@@ -836,6 +848,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 }
 
 - (void)dragPrimaryDX:(float)dx dy:(float)dy shift:(BOOL)shift control:(BOOL)control {
+    _lastInput = CACurrentMediaTime();
     Frame *frame = (_mouseTarget == -1) ? &_scene.camera
                  : (_mouseTarget >= 0 && _mouseTarget < MAX_LIGHTS) ? &_scene.lights[_mouseTarget] : nullptr;
     if (control) {
@@ -866,6 +879,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 }
 
 - (void)dragSecondaryDX:(float)dx dy:(float)dy shift:(BOOL)shift {
+    _lastInput = CACurrentMediaTime();
     if (_mouseTarget != -1) return;
     float scale = shift ? 1.0f : 8.0f;
     _scene.camera.pos -= _scene.camera.z * (dx - dy) * scale;
@@ -873,6 +887,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
 }
 
 - (void)dolly:(float)amount {
+    _lastInput = CACurrentMediaTime();
     if (_mouseTarget != -1) return;
     _scene.camera.pos += _scene.camera.z * amount;
     [self clearAll];
@@ -1201,25 +1216,64 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     return !_paused && (_cur->gen != GenNone || _cur->next != GenNone);
 }
 
+// Hands the graphics card its next slices of work, if it has room for them.
+// Called every screen refresh, and again each time a slice finishes, so the
+// card goes straight from one slice to the next without waiting for the screen.
+- (void)pumpWork {
+    while (_slicesInFlight < kSlicesInFlight && [self hasPendingWork]) {
+        // The stage about to be worked on, and how many tiles it can do in one slice.
+        const GenMode stage = (_cur->gen == GenNone) ? _cur->next : _cur->gen;
+        const int budget = (stage < GenNone) ? (int)MAX(1.0, _tilesForStage[stage]) : 1;
+
+        id<MTLCommandBuffer> cb = [_queue commandBuffer];
+        const int tiles = [self stepInto:cb maxTiles:budget];
+        _displayDirty = YES;
+        _slicesInFlight++;
+
+        const BOOL interacting = (CACurrentMediaTime() - _lastInput) < kInteractingFor;
+        const double target = interacting ? kSliceSecondsInteracting : kSliceSeconds;
+        const NSUInteger generation = _compileGeneration;
+        __weak Renderer *weakSelf = self;
+        [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            if (done.status == MTLCommandBufferStatusError)
+                NSLog(@"Gpucaster: the graphics card reported an error: %@", done.error.localizedDescription);
+            double seconds = done.GPUEndTime - done.GPUStartTime;
+            dispatch_async(dispatch_get_main_queue(), ^{
+                Renderer *me = weakSelf;
+                if (!me) return;
+                me->_slicesInFlight--;
+                // Learn how many tiles of this stage fit in a slice.  (Ignore
+                // measurements made with shaders that have since been replaced.)
+                if (tiles > 0 && stage < GenNone && seconds > 0 && generation == me->_compileGeneration) {
+                    double ideal = MIN(4096.0, MAX(1.0, target / (seconds / tiles)));
+                    double &t = me->_tilesForStage[stage];
+                    // Drop straight away if a slice took too long; grow gradually.
+                    t = (ideal < t) ? ideal : 0.5 * t + 0.5 * ideal;
+                }
+                [me pumpWork];
+            });
+        }];
+        [cb commit];
+    }
+}
+
 - (void)drawInMTKView:(MTKView *)view {
     CGSize size = view.drawableSize;
     [self setImageWidth:(int)size.width height:(int)size.height];
 
-    // When the picture is finished and already on screen, do nothing at all,
-    // so an idle app uses no graphics card time.
-    if (![self hasPendingWork] && !_displayDirty) return;
+    [self pumpWork];
+
+    // When the picture on screen is up to date, do nothing at all, so an idle
+    // app uses no graphics card time.
+    if (!_displayDirty) return;
 
     MTLRenderPassDescriptor *pass = view.currentRenderPassDescriptor;
     id<CAMetalDrawable> drawable = view.currentDrawable;
     if (!pass || !drawable) return;
 
+    // Copy the picture to the window.  This waits its turn behind the work
+    // already handed to the graphics card, so it shows the latest results.
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
-    // The stage about to be worked on, and its tile budget.
-    const GenMode stage = (_cur->gen == GenNone) ? _cur->next : _cur->gen;
-    const int budget = (stage < GenNone) ? (int)MAX(1.0, _tilesForStage[stage]) : 1;
-    const int tiles = [self stepInto:cb maxTiles:budget];
-
-    // Copy the picture to the window.
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
     if (_pipelines && _final) {
         simd_float4 viewSize = simd_make_float4((float)size.width, (float)size.height,
@@ -1232,29 +1286,8 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     }
     [enc endEncoding];
     [cb presentDrawable:drawable];
-    _displayDirty = NO;
-
-    // Measure how long the graphics card took, and adjust how many tiles to
-    // draw per frame so the app stays responsive whatever the scene costs.
-    if (tiles > 0 && stage < GenNone) {
-        __weak Renderer *weakSelf = self;
-        const NSUInteger generation = _compileGeneration;
-        [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
-            if (done.status == MTLCommandBufferStatusError)
-                NSLog(@"Gpucaster: the graphics card reported an error: %@", done.error.localizedDescription);
-            double seconds = done.GPUEndTime - done.GPUStartTime;
-            if (seconds <= 0) return;
-            dispatch_async(dispatch_get_main_queue(), ^{
-                Renderer *me = weakSelf;
-                if (!me || generation != me->_compileGeneration) return;   // measured with older shaders
-                double ideal = MIN(4096.0, MAX(1.0, kTargetGpuSeconds / (seconds / tiles)));
-                double &t = me->_tilesForStage[stage];
-                // Drop straight away if a frame took too long; grow gradually.
-                t = (ideal < t) ? ideal : 0.5 * t + 0.5 * ideal;
-            });
-        }];
-    }
     [cb commit];
+    _displayDirty = NO;
 }
 
 #pragma mark - Off-screen use and saving

@@ -96,7 +96,8 @@ and an Apple silicon Mac.
 
 Testing aids (environment variables): `GPUCASTER_SHAPE=name` or a full path chooses
 the shape; `GPUCASTER_UISHOT=path` saves a picture of the window's controls after 4
-seconds and quits; a diagnostic log of mouse presses and slider changes is written
+seconds and quits; `GPUCASTER_BENCH=1` measures geometry passes per second in the
+live window and quits; a diagnostic log of mouse presses and slider changes is written
 to `~/Library/Logs/Gpucaster/debug.log` whenever the app runs from the source folder
 (or with `GPUCASTER_LOG` set), replaced at each launch; `GPUCASTER_UICHECK=1` drives every sidebar slider through its
 handler, checks nothing overlaps the visible controls, exercises the colour picker,
@@ -121,8 +122,14 @@ the assistant on this Mac, which is why the layout snapshot exists.
 - Shader code lives inside a `Scene` struct (Metal has no global variables), with
   macros in `compat.metal` so shape files read almost like the original.
 - Risky floating-point optimisations are off (Metal "safe" math mode).
-- The app chooses how many 128-pixel tiles to draw per frame from measured GPU time;
+- The app chooses how many 128-pixel tiles to draw at a time from measured GPU time;
   there are no tile-size launchers.
+- Work is handed to the graphics card in back-to-back slices (two queued at once),
+  independent of the screen refresh, so the card stays busy. Slices aim for 30 ms
+  when nothing is being touched and 8 ms for half a second after any input. The
+  window only copies the latest picture to the screen each refresh. Before this
+  (2026-11-12) work was done once per screen refresh with a 10 ms budget and at most
+  one pass per frame, which used well under half the card.
 - Camera moves restart rendering immediately (the original waited for the pass to end).
 - Random numbers follow the original step for step (same generator, same order).
   Because the scene seed also seeds the lighting generator, restoring a seed (undo,
@@ -207,6 +214,14 @@ Ideas not yet started:
 
 ## Notes
 
+- Speed in the window at 1960 x 1448 on this Mac (M4 Max), geometry passes per
+  second, before -> after feeding the card continuously: fractal dodecahedron 8.8 ->
+  16.7 (flat-out off-screen: 20), blobs 63 -> 176 (flat-out: 178), noise-warped
+  ground 4.5 after. Measure with `GPUCASTER_BENCH=1`.
+- The user found the Mac version much slower than Windows in the VM. Half of that was
+  the pacing above. The other possible half, not addressed at the user's choice: the
+  Mac renders at full Retina resolution, four times the pixels of an unscaled window.
+  A "half detail" option was offered and declined for now.
 - Export timing on this Mac (M4 Max): the fractal dodecahedron, the slowest example,
   at 7840 x 5792 (45 megapixels) with 40 geometry and 16 shading passes took 4 minutes
   38 seconds and produced an 89 MB PNG.
