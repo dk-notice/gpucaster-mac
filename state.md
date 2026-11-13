@@ -18,7 +18,7 @@ Last updated: 2026-11-12
 - Shapes: each world is one `.metal` file in `mac/shaders/shapes/` holding an `Eval()`
   function. `// param: name = default (min to max)` lines become sidebar sliders.
   Saving a shape file reloads it; errors show the file and line.
-- Four new built-in shapes (after 1.2), written for this port after looking at Ryan
+- Four new built-in shapes (new in 1.3), written for this port after looking at Ryan
   Geiss's gallery (geisswerks.com/ryan/PROG-STIL): Menger sponge, Tangled rings,
   Ribbon ring (a Moebius band with odd half-twists) and Banded terrain (noise terrain
   coloured in height bands). They are new formulas aiming for a similar look, not
@@ -51,7 +51,7 @@ Last updated: 2026-11-12
   hold-down button shows the selected light alone.
 - Packaged as a self-contained, double-clickable app with an icon and the shaders
   inside it. `make dist` produces `mac/build/Gpucaster-<version>.zip`. Current
-  version: 1.2 (set in `mac/Makefile` and `mac/Info.plist`).
+  version: 1.3 (set in `mac/Makefile` and `mac/Info.plist`).
 - Your own shapes live in `~/Documents/Gpucaster Shapes`, listed below the built-in
   ones. Built-in shapes inside a packaged app are read-only; Edit offers a copy.
 - A command-line mode renders a picture without a window (`--render`, see README).
@@ -234,8 +234,9 @@ the assistant on this Mac, which is why the layout snapshot exists.
 
 Releases so far: 1.0 (the finished port), 1.1 (lights shown by direction with a
 direction ball, brightness slider and solo; colour picker fix; about twice the
-rendering speed) and 1.2 (the Experimental options, exports that are always
-accurate, file names from shape and date). Versioning: new features that keep old
+rendering speed), 1.2 (the Experimental options, exports that are always
+accurate, file names from shape and date) and 1.3 (five new shapes and Make
+Lights White). Versioning: new features that keep old
 scenes and shapes working are a minor version; fixes only would be a patch (1.2.1);
 a change that breaks old files would be 2.0. Released versions are never altered.
 New work continues on `main`. Ideas not yet started:
@@ -254,7 +255,7 @@ New work continues on `main`. Ideas not yet started:
 
 - Published at https://github.com/dk-notice/gpucaster-mac (public). It holds only the
   Mac port (`mac/`), `README.md` and this file.
-- Tags `v1.0`, `v1.1` and `v1.2`, each with a GitHub Release carrying the app zip.
+- Tags `v1.0`, `v1.1`, `v1.2` and `v1.3`, each with a GitHub Release carrying the app zip.
 - Version 1.2 is installed on this Mac at `/Applications/Gpucaster.app` (copied from
   the release zip, 2026-11-12). It is separate from the development build in
   `mac/build/`, which is what `make run` opens. The installed copy has no
