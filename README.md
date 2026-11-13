@@ -22,22 +22,32 @@ See [state.md](state.md) for current status, known gaps and next steps.
 ## Requirements
 
 - An Apple silicon Mac running macOS 15 or later.
-- Apple's Command Line Tools (`xcode-select --install`). Full Xcode is not needed.
 
-## Build and run
+## Install
 
-From the `mac` folder:
+Download `Gpucaster-1.0.zip` from the
+[Releases page](https://github.com/dk-notice/gpucaster-mac/releases), unzip it
+and move Gpucaster to your Applications folder.
+
+The app is not signed with a paid Apple developer certificate, so macOS blocks
+it the first time. To allow it: try to open it once, then go to System Settings >
+Privacy & Security, scroll down to the message about Gpucaster, and click
+Open Anyway. This is needed only once.
+
+## Build from source
+
+You need Apple's Command Line Tools (`xcode-select --install`); full Xcode is
+not needed. From the `mac` folder:
 
 ```bash
 make run
 ```
 
-To run the off-screen self-test, which renders the default scene through every
-stage and saves pictures into `mac/build/selftest/`:
-
-```bash
-make test
-```
+Other targets: `make test` renders test scenes off-screen and checks the
+results (pictures land in `mac/build/selftest/`), and `make dist` makes the
+zip. When run from the source folder, the app uses the `shaders` folder beside
+it, so those files can be edited directly; anywhere else it uses the copy
+inside the app.
 
 ## Using it
 
@@ -69,8 +79,9 @@ Two kinds of file describe a picture:
   here.
 
 Pick a shape from the pop-up at the left of the toolbar, or from the Shape
-menu. Any `.metal` file placed in the shapes folder appears in the list, and
-Shape > Open Shape File opens one from anywhere.
+menu. Your own shapes live in a `Gpucaster Shapes` folder in Documents (Shape >
+Show My Shapes Folder) and are listed below the built-in ones. Shape > Open
+Shape File opens one from anywhere.
 
 | Shape | Shape |
 |---|---|
@@ -87,8 +98,8 @@ so pick the matching shape yourself.
 
 ## Making new worlds
 
-Choose Shape > New Shape. It copies the current shape under a new name, switches
-to it and opens it in your text editor. Edit the `Eval()` function and save; the
+Choose Shape > New Shape. It copies the current shape into your shapes folder
+under a new name, switches to it and opens it in your text editor. Edit the `Eval()` function and save; the
 app reloads it by itself. If there is a mistake, it shows the file and line and
 keeps the last version that worked.
 
@@ -105,12 +116,25 @@ value is saved in scene files.
 [mac/shaders/eval_common.metal](mac/shaders/eval_common.metal) lists everything
 a shape file can use.
 
+## Rendering from the command line
+
+The program inside the app can render a picture without opening a window:
+
+```bash
+Gpucaster.app/Contents/MacOS/Gpucaster --render out.png --shape mandelbox --size 3840x2160
+```
+
+Options: `--shape` (a built-in name or a `.metal` file), `--scene file.scn`,
+`--size WIDTHxHEIGHT`, `--geometry passes` and `--shading passes`.
+
 ## Files
 
 - `mac/src/` - the app (Objective-C++).
 - `mac/shaders/` - the shaders (Metal Shading Language), loaded as text when
   the app runs.
-- `mac/shaders/shapes/` - one file per shape.
+- `mac/shaders/shapes/` - one file per built-in shape.
+- `mac/tools/make_icon.m` and `mac/Gpucaster.icns` - the app icon, a picture of
+  the fractal dodecahedron drawn by the app itself (`make icon` re-creates it).
 
 ## Credits and licence
 

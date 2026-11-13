@@ -83,7 +83,7 @@
     Renderer *_renderer;
     Sidebar *_sidebar;
     NSPopUpButton *_shapePopup;
-    NSArray<NSString *> *_shapePopupPaths;   // what the pop-up currently lists
+    NSArray *_shapePopupPaths;      // what the pop-up currently lists (NSNull = dividing line)
     NSButton *_runButton;           // Pause / Resume / Refine More
     NSProgressIndicator *_progress;
     NSTextField *_status;
@@ -271,21 +271,42 @@
 }
 
 // Keeps the shape pop-up in step with the files in the shapes folder.
-- (void)refreshShapePopup {
-    NSMutableArray<NSString *> *paths = [[_renderer availableShapes] mutableCopy];
+// The shapes to offer: built-in ones, then yours, then (if it is neither) the
+// one in use, which was opened from somewhere else.  nil marks a dividing line.
+- (NSArray *)shapeListWithDividers {
+    NSMutableArray *list = [[_renderer builtInShapes] mutableCopy];
+    NSArray<NSString *> *mine = [_renderer userShapes];
+    if (mine.count) {
+        [list addObject:[NSNull null]];
+        [list addObjectsFromArray:mine];
+    }
     NSString *current = _renderer.shapePath;
-    if (current && ![paths containsObject:current]) [paths addObject:current];   // a shape opened from elsewhere
-    if (![paths isEqualToArray:_shapePopupPaths]) {
-        _shapePopupPaths = [paths copy];
+    if (current && ![list containsObject:current]) {
+        [list addObject:[NSNull null]];
+        [list addObject:current];
+    }
+    return list;
+}
+
+// Keeps the shape pop-up in step with the shape folders.
+- (void)refreshShapePopup {
+    NSArray *list = [self shapeListWithDividers];
+    if (![list isEqualToArray:_shapePopupPaths]) {
+        _shapePopupPaths = list;
         [_shapePopup removeAllItems];
-        for (NSString *path in paths) {
+        for (id entry in list) {
+            if (entry == [NSNull null]) {
+                [_shapePopup.menu addItem:[NSMenuItem separatorItem]];
+                continue;
+            }
             [_shapePopup addItemWithTitle:@""];   // (titles set below, so duplicates are allowed)
-            _shapePopup.lastItem.title = [Renderer displayNameForShape:path];
-            _shapePopup.lastItem.representedObject = path;
+            _shapePopup.lastItem.title = [Renderer displayNameForShape:entry];
+            _shapePopup.lastItem.representedObject = entry;
         }
     }
-    NSInteger index = current ? (NSInteger)[paths indexOfObject:current] : -1;
-    if (index >= 0 && index != NSNotFound && _shapePopup.indexOfSelectedItem != index) [_shapePopup selectItemAtIndex:index];
+    NSString *current = _renderer.shapePath;
+    NSInteger index = current ? [_shapePopup indexOfItemWithRepresentedObject:current] : -1;
+    if (index >= 0 && _shapePopup.indexOfSelectedItem != index) [_shapePopup selectItemAtIndex:index];
 }
 
 - (void)tick {
@@ -444,6 +465,7 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     [shape addItem:[NSMenuItem separatorItem]];
     [self add:@"Edit Shape in Text Editor" to:shape action:@selector(editShape:) key:@"e" mods:cmd];
     [self add:@"Show Shape in Finder" to:shape action:@selector(revealShape:) key:@"" mods:none];
+    [self add:@"Show My Shapes Folder" to:shape action:@selector(showMyShapes:) key:@"" mods:none];
     [bar addItemWithTitle:@"" action:nil keyEquivalent:@""].submenu = shape;
 
     // Render
@@ -514,17 +536,19 @@ static const NSInteger kShapeItemTag = 1000;
 // Rebuilds the list of shapes at the top of the Shape menu each time it opens.
 - (void)menuNeedsUpdate:(NSMenu *)menu {
     while (menu.numberOfItems > 0 && [menu itemAtIndex:0].tag == kShapeItemTag) [menu removeItemAtIndex:0];
-    NSMutableArray<NSString *> *paths = [[_renderer availableShapes] mutableCopy];
-    NSString *current = _renderer.shapePath;
-    if (current && ![paths containsObject:current]) [paths addObject:current];
     NSInteger at = 0;
-    for (NSString *path in paths) {
-        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[Renderer displayNameForShape:path]
-                                                      action:@selector(shapeMenuPicked:)
-                                               keyEquivalent:@""];
-        item.target = self;
+    for (id entry in [self shapeListWithDividers]) {
+        NSMenuItem *item;
+        if (entry == [NSNull null]) {
+            item = [NSMenuItem separatorItem];
+        } else {
+            item = [[NSMenuItem alloc] initWithTitle:[Renderer displayNameForShape:entry]
+                                              action:@selector(shapeMenuPicked:)
+                                       keyEquivalent:@""];
+            item.target = self;
+            item.representedObject = entry;
+        }
         item.tag = kShapeItemTag;
-        item.representedObject = path;
         [menu insertItem:item atIndex:at++];
     }
 }
@@ -579,7 +603,7 @@ static const NSInteger kShapeItemTag = 1000;
     panel.allowedContentTypes = [self shapeTypes];
     panel.allowsOtherFileTypes = YES;
     panel.message = @"Choose a shape file (.metal)";
-    if (_renderer.shapesDir) panel.directoryURL = [NSURL fileURLWithPath:_renderer.shapesDir];
+    if ([_renderer userShapes].count) panel.directoryURL = [NSURL fileURLWithPath:_renderer.userShapesDir];
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         [self checkpoint:nil];
@@ -594,9 +618,10 @@ static const NSInteger kShapeItemTag = 1000;
     if (!source) return;
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.allowedContentTypes = [self shapeTypes];
-    panel.nameFieldStringValue = @"my_shape.metal";
+    panel.nameFieldStringValue = [[[source.lastPathComponent stringByDeletingPathExtension]
+        stringByAppendingString:@"_copy"] stringByAppendingPathExtension:@"metal"];
     panel.message = @"Name the new shape. It starts as a copy of the current one.";
-    if (_renderer.shapesDir) panel.directoryURL = [NSURL fileURLWithPath:_renderer.shapesDir];
+    if ([_renderer prepareUserShapesDir]) panel.directoryURL = [NSURL fileURLWithPath:_renderer.userShapesDir];
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         NSString *dest = panel.URL.path;
@@ -617,8 +642,28 @@ static const NSInteger kShapeItemTag = 1000;
     }];
 }
 
+- (void)showMyShapes:(id)sender {
+    if (![_renderer prepareUserShapesDir]) {
+        [self showError:@"Your shapes folder could not be created" detail:_renderer.userShapesDir];
+        return;
+    }
+    [[NSWorkspace sharedWorkspace] openURL:[NSURL fileURLWithPath:_renderer.userShapesDir isDirectory:YES]];
+}
+
 - (void)editShape:(id)sender {
     if (!_renderer.shapePath) return;
+    // The shapes that come inside the app can't be changed in place; make a copy instead.
+    if ([_renderer shapeIsReadOnly:_renderer.shapePath]) {
+        NSAlert *a = [NSAlert new];
+        a.messageText = @"This shape comes with the app";
+        a.informativeText = @"To change it, make your own copy. The copy goes in the \"Gpucaster Shapes\" folder in Documents and opens in your text editor.";
+        [a addButtonWithTitle:@"Make a Copy…"];
+        [a addButtonWithTitle:@"Cancel"];
+        [a beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
+            if (r == NSAlertFirstButtonReturn) dispatch_async(dispatch_get_main_queue(), ^{ [self newShape:nil]; });
+        }];
+        return;
+    }
     NSURL *file = [NSURL fileURLWithPath:_renderer.shapePath];
     NSWorkspace *ws = [NSWorkspace sharedWorkspace];
     // ".metal" has no editor of its own, so use whatever opens plain text files.
@@ -1165,6 +1210,30 @@ static int RunSelfTest(NSString *outDir) {
         if (bad) failures++;
     }
 
+    // Your own shapes folder: a shape put there is listed after the built-in
+    // ones and is not treated as part of the app.
+    if (defaultShape) {
+        NSString *mine = [outDir stringByAppendingPathComponent:@"my_shapes"];
+        setenv("GPUCASTER_USER_SHAPES", mine.fileSystemRepresentation, 1);
+        Renderer *u = [[Renderer alloc] initWithDevice:device];
+        NSArray<NSString *> *builtIn = [u builtInShapes];
+        NSString *copy = [mine stringByAppendingPathComponent:@"my_test_shape.metal"];
+        BOOL made = [u prepareUserShapesDir];
+        [[NSFileManager defaultManager] removeItemAtPath:copy error:nil];
+        made = made && [[NSFileManager defaultManager] copyItemAtPath:builtIn.firstObject toPath:copy error:nil];
+        NSArray<NSString *> *all = [u availableShapes];
+        BOOL listed = made && [[u userShapes] isEqualToArray:@[copy]] && all.count == builtIn.count + 1 && [all.lastObject isEqualToString:copy];
+        BOOL loads = listed && ![u compileErrorForShape:copy] && ![u shapeIsReadOnly:copy];
+        NSString *insideApp = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"shaders/shapes/blobs.metal"];
+        BOOL protects = [u shapeIsReadOnly:insideApp];
+        printf("selftest: shaders from %s; %d built-in shapes\n", u.shaderDir.UTF8String, (int)builtIn.count);
+        if (!listed || !loads || !protects || builtIn.count < 10) {
+            fprintf(stderr, "selftest: user shapes folder not working (%d %d %d)\n", listed, loads, protects);
+            failures++;
+        }
+        unsetenv("GPUCASTER_USER_SHAPES");
+    }
+
     // Every shape in the shapes folder must compile.
     if (defaultShape) {
         NSArray<NSString *> *shapes = [r availableShapes];
@@ -1197,8 +1266,54 @@ static int RunSelfTest(NSString *outDir) {
     return failures ? 1 : 0;
 }
 
+// Renders one picture without opening a window:
+//   Gpucaster --render out.png [--shape name-or-file] [--scene file.scn]
+//             [--size WIDTHxHEIGHT] [--geometry passes] [--shading passes]
+static int RunRender(int argc, const char *argv[]) {
+    NSString *out = nil, *scene = nil;
+    int width = 1920, height = 1200, geometry = 40, shading = 16;
+    for (int i = 1; i < argc; i++) {
+        const char *a = argv[i];
+        const char *v = (i + 1 < argc) ? argv[i + 1] : NULL;
+        if (!v) break;
+        if (!strcmp(a, "--render")) out = @(v);
+        else if (!strcmp(a, "--shape")) setenv("GPUCASTER_SHAPE", v, 1);
+        else if (!strcmp(a, "--scene")) scene = @(v);
+        else if (!strcmp(a, "--size")) sscanf(v, "%dx%d", &width, &height);
+        else if (!strcmp(a, "--geometry")) geometry = atoi(v);
+        else if (!strcmp(a, "--shading")) shading = atoi(v);
+        else continue;
+        i++;
+    }
+    id<MTLDevice> device = MTLCreateSystemDefaultDevice();
+    if (!device || !out) { fprintf(stderr, "render: no Metal device, or no output file given\n"); return 1; }
+    setenv("GPUCASTER_SHAPE", "blobs", 0);   // unless --shape said otherwise
+    Renderer *r = [[Renderer alloc] initWithDevice:device];
+    if (r.lastError) { fprintf(stderr, "render: shader error:\n%s\n", r.lastError.UTF8String); return 1; }
+    if (scene) {
+        std::string error;
+        if (!r.scene->Import(scene.fileSystemRepresentation, false, &error)) {
+            fprintf(stderr, "render: cannot open scene: %s\n", error.c_str());
+            return 1;
+        }
+        [r sceneReplaced];
+    }
+    if (![r canRenderWidth:width height:height]) { fprintf(stderr, "render: %d x %d is too large for this Mac\n", width, height); return 1; }
+    r.autoGeomPasses = MAX(1, geometry);
+    r.autoAmboPasses = MAX(1, shading);
+    [r setImageWidth:width height:height];
+    CFTimeInterval t0 = CACurrentMediaTime();
+    if (![r runUntilFinished:100000] || ![r saveImageToPNG:out]) { fprintf(stderr, "render: failed\n"); return 1; }
+    printf("render: %d x %d, %s, %.1f s -> %s\n", r.imageWidth, r.imageHeight,
+           [Renderer displayNameForShape:r.shapePath].UTF8String, CACurrentMediaTime() - t0, out.UTF8String);
+    return 0;
+}
+
 int main(int argc, const char *argv[]) {
     @autoreleasepool {
+        for (int i = 1; i + 1 < argc; i++) {
+            if (strcmp(argv[i], "--render") == 0) return RunRender(argc, argv);
+        }
         for (int i = 1; i + 1 < argc; i++) {
             if (strcmp(argv[i], "--selftest") == 0)
                 return RunSelfTest([NSString stringWithUTF8String:argv[i + 1]]);

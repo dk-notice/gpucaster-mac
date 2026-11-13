@@ -71,7 +71,16 @@ extern NSString *const kVizModeNames[kNumVizModes];
 // world.  The built-in ones live in the "shapes" folder inside shaderDir.
 @property (nonatomic, readonly) NSString *shapePath;           // the shape in use (full path)
 @property (nonatomic, readonly) NSString *shapesDir;
-- (NSArray<NSString *> *)availableShapes;                      // full paths, sorted by name
+- (NSArray<NSString *> *)availableShapes;                      // built-in ones, then your own
+- (NSArray<NSString *> *)builtInShapes;                        // full paths, sorted by name
+- (NSArray<NSString *> *)userShapes;
+// Shapes you make are kept in a "Gpucaster Shapes" folder in Documents, apart
+// from the ones that come with the app.  The folder is only looked at once it
+// has been used, so the app doesn't ask for access to Documents needlessly.
+@property (nonatomic, readonly) NSString *userShapesDir;
+- (BOOL)prepareUserShapesDir;                                  // creates it if needed; NO if that failed
+// YES for a shape inside the app itself, which must not be edited in place.
+- (BOOL)shapeIsReadOnly:(NSString *)path;
 - (void)selectShape:(NSString *)path;                          // compiles it, then starts again
 - (void)selectShape:(NSString *)path keepParamValues:(BOOL)keep;   // keep = values came from a scene file
 // The adjustable values the current shape declares.

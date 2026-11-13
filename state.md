@@ -25,6 +25,11 @@ Last updated: 2026-11-12
 - Scene files (`.scn`) use the Windows version's format. Saving a scene or image
   also writes the shape beside it as `name.metal`; opening a scene picks that up.
 - An idle app uses no graphics card time.
+- Packaged as version 1.0: a self-contained, double-clickable app with an icon and
+  the shaders inside it. `make dist` produces `mac/build/Gpucaster-1.0.zip`.
+- Your own shapes live in `~/Documents/Gpucaster Shapes`, listed below the built-in
+  ones. Built-in shapes inside a packaged app are read-only; Edit offers a copy.
+- A command-line mode renders a picture without a window (`--render`, see README).
 
 ## Verified automatically (`make test`)
 
@@ -41,13 +46,24 @@ Last updated: 2026-11-12
 - Shape switching with background compiling: each shape loads with its own
   parameters at their defaults, including when two are picked in quick succession.
 - Scene files survive save and reload.
+- A shape in the user shapes folder is listed and loads; shapes inside the app are
+  treated as read-only.
 
 Also checked by hand-run commands: every shape renders when selected, a shape file
 outside the folder loads, a broken shape reports its own file and line, and the
 window layout via the app's layout snapshot. A real 4x export of the fractal
 dodecahedron through the app worked (see Notes).
 
+The packaged zip was unpacked in a separate folder and the whole self-test passed
+there using the shaders inside the app; its signature verifies and its window opens.
+
 ## Not yet verified (needs a person at the window)
+
+- The downloaded app's first launch: macOS will block it until allowed in System
+  Settings > Privacy & Security (it is not notarised). Not tried on another Mac.
+- New Shape and Show My Shapes Folder with the real Documents folder, including the
+  one-time macOS prompt for access to Documents.
+- "Make a Copy" when editing a built-in shape in the packaged app.
 
 - Pause / Resume / Refine More button and the progress bar while rendering.
 - Shape sliders, Reset to defaults, the Advanced disclosure.
@@ -96,6 +112,13 @@ the assistant on this Mac, which is why the layout snapshot exists.
   Because the scene seed also seeds the lighting generator, restoring a seed (undo,
   or opening a scene) makes the next random lightings repeat from the start.
 - Per-tile random numbers use their own generator.
+- A packaged app prefers a `shaders` folder found beside or above it (the source
+  checkout) over the copy inside it, so running from `mac/build` edits the originals.
+- The user shapes folder is only read once it has been used (New Shape, Show My
+  Shapes Folder, or opening a shape from it), so the app does not ask for access to
+  Documents at first launch.
+- The icon is generated, not hand-drawn: `make icon` renders the fractal
+  dodecahedron with the app and masks it to the standard rounded square.
 - Shader compiles start immediately and run side by side; only the newest request's
   result is used. Whether a shape's slider values are kept or reset is decided from
   the file the shaders were actually compiled from.
@@ -113,8 +136,8 @@ the assistant on this Mac, which is why the layout snapshot exists.
 
 ## Known gaps
 
-- Not packaged: the app runs from the build folder and finds its shaders beside it.
-  No app icon. Needs a decision on where a packaged app keeps the user's own shapes.
+- Not notarised: there is no paid Apple developer account, so a downloaded copy has
+  to be allowed once in System Settings. Apple silicon only.
 - Export is limited by graphics memory (about 30 megapixels per gigabyte allowed).
 - No mouse zoom lens (the original's Z key).
 - Lighting history is not saved between launches.
@@ -122,13 +145,18 @@ the assistant on this Mac, which is why the layout snapshot exists.
 
 ## Next steps
 
-1. User tries the new controls; fix whatever doesn't feel right.
-2. Packaging: icon, shaders inside the app, a home for user shapes.
+Version 1.0 is the finished baseline. New work continues on `main`; later
+milestones get their own tags (v1.1, v2.0 and so on). Ideas not yet started:
+
+1. Save the lighting history between launches.
+2. A zoom lens for checking detail (the original's Z key).
+3. Notarisation, if an Apple developer account is ever available.
 
 ## Repository
 
 - Published at https://github.com/dk-notice/gpucaster-mac (public). It holds only the
   Mac port (`mac/`), `README.md` and this file.
+- Version 1.0 is tagged `v1.0`, with a GitHub Release carrying `Gpucaster-1.0.zip`.
 - The original Windows release stays in this folder on disk but is ignored by git, so
   it is never uploaded. The earlier local history that included it is kept on the
   local branch `local-full-history`; do not push that branch.

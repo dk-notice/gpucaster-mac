@@ -13,6 +13,8 @@ static NSString *const kMasterShader = @"gpucaster.metal";
 static NSString *const kShapeInclude = @"@shape";     // stands for the chosen shape file
 static NSString *const kDefaultShape = @"blobs.metal";
 static NSString *const kShapeDefaultsKey = @"ShapePath";
+static NSString *const kUserShapesUsedKey = @"UserShapesFolderUsed";
+static NSString *const kUserShapesFolderName = @"Gpucaster Shapes";
 static const int kTileEdge = 128;             // pixels; the app decides how many tiles to draw per frame
 static const double kTargetGpuSeconds = 0.010;   // GPU time to spend per frame, to keep the app responsive
 static const int kTileStride = 1280;          // bytes between tiles in the per-tile buffer (>= sizeof(TileUniforms))
@@ -184,8 +186,9 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 
 #pragma mark - Shaders
 
-// The shaders live outside the app bundle so they can be edited.  Look for a
-// "shaders" folder next to, or a few levels above, the app.
+// A copy of the shaders is inside the app.  When the app is run from its
+// source folder, the "shaders" folder next to (or a few levels above) it is
+// used instead, so the originals can be edited.
 + (NSString *)findShaderDir {
     NSFileManager *fm = [NSFileManager defaultManager];
     const char *env = getenv("GPUCASTER_SHADER_DIR");
@@ -198,6 +201,10 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         if ([fm fileExistsAtPath:[candidate stringByAppendingPathComponent:kMasterShader]])
             return candidate;
     }
+
+    // Otherwise use the copy inside the app.
+    NSString *bundled = [[[NSBundle mainBundle] resourcePath] stringByAppendingPathComponent:@"shaders"];
+    if ([fm fileExistsAtPath:[bundled stringByAppendingPathComponent:kMasterShader]]) return bundled;
     return nil;
 }
 
@@ -490,9 +497,8 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 
 - (NSString *)shapesDir { return self.shaderDir ? [self.shaderDir stringByAppendingPathComponent:@"shapes"] : nil; }
 
-- (NSArray<NSString *> *)availableShapes {
+static NSArray<NSString *> *ShapesIn(NSString *dir) {
     NSMutableArray<NSString *> *paths = [NSMutableArray array];
-    NSString *dir = self.shapesDir;
     if (!dir) return paths;
     for (NSString *name in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
         if ([name hasSuffix:@".metal"] && ![name hasPrefix:@"."]) [paths addObject:[dir stringByAppendingPathComponent:name]];
@@ -501,6 +507,40 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent];
     }];
     return paths;
+}
+
+- (NSArray<NSString *> *)builtInShapes { return ShapesIn(self.shapesDir); }
+
+- (NSString *)userShapesDir {
+    const char *env = getenv("GPUCASTER_USER_SHAPES");
+    if (env && *env) return [NSString stringWithUTF8String:env];
+    NSString *docs = NSSearchPathForDirectoriesInDomains(NSDocumentDirectory, NSUserDomainMask, YES).firstObject;
+    return [docs stringByAppendingPathComponent:kUserShapesFolderName];
+}
+
+- (BOOL)userShapesInUse {
+    return getenv("GPUCASTER_USER_SHAPES") != NULL || [[NSUserDefaults standardUserDefaults] boolForKey:kUserShapesUsedKey];
+}
+
+- (NSArray<NSString *> *)userShapes {
+    return [self userShapesInUse] ? ShapesIn(self.userShapesDir) : @[];
+}
+
+- (BOOL)prepareUserShapesDir {
+    NSString *dir = self.userShapesDir;
+    if (!dir) return NO;
+    BOOL ok = [[NSFileManager defaultManager] createDirectoryAtPath:dir withIntermediateDirectories:YES attributes:nil error:nil];
+    if (ok) [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kUserShapesUsedKey];
+    return ok;
+}
+
+- (NSArray<NSString *> *)availableShapes {
+    return [[self builtInShapes] arrayByAddingObjectsFromArray:[self userShapes]];
+}
+
+- (BOOL)shapeIsReadOnly:(NSString *)path {
+    NSString *bundle = [[[NSBundle mainBundle] bundlePath] stringByStandardizingPath];
+    return path && [[path stringByStandardizingPath] hasPrefix:[bundle stringByAppendingString:@"/"]];
 }
 
 + (NSString *)displayNameForShape:(NSString *)path {
@@ -539,6 +579,9 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 
 - (void)selectShape:(NSString *)path keepParamValues:(BOOL)keep {
     if (!path) return;
+    // A shape in your own folder means the folder is in use; start listing it.
+    if (self.userShapesDir && [path hasPrefix:[self.userShapesDir stringByAppendingString:@"/"]])
+        [[NSUserDefaults standardUserDefaults] setBool:YES forKey:kUserShapesUsedKey];
     _keepSlotsForShape = keep ? path : nil;
     self.shapePath = path;
     [[NSUserDefaults standardUserDefaults] setObject:path forKey:kShapeDefaultsKey];
