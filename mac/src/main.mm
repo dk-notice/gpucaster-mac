@@ -240,6 +240,23 @@
         });
     }
 
+    // For measuring speed in the real window: GPUCASTER_BENCH=1 refines geometry
+    // only, reports how many passes were done between two moments, and quits.
+    if (getenv("GPUCASTER_BENCH")) {
+        _renderer.autoGeomPasses = 100000;
+        [_renderer clearAll];
+        __block int at3 = 0;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 3 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{ at3 = self->_renderer.geomPasses; });
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 9 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            int n = self->_renderer.geomPasses - at3;
+            double mp = self->_renderer.imageWidth * self->_renderer.imageHeight * 1e-6;
+            printf("bench: %d x %d (%.2f MP), %.1f geometry passes per second in the window, %.0f megapixel-passes per second, screen refresh %ld Hz\n",
+                   self->_renderer.imageWidth, self->_renderer.imageHeight, mp, n / 6.0, mp * n / 6.0,
+                   (long)self->_window.screen.maximumFramesPerSecond);
+            [NSApp terminate:nil];
+        });
+    }
+
     const char *shot = getenv("GPUCASTER_UISHOT");
     if (shot && *shot) {
         NSString *path = [NSString stringWithUTF8String:shot];
