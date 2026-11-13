@@ -24,6 +24,11 @@
 // Called after "Randomize all lighting".
 @property (nonatomic, copy) void (^didRandomizeLighting)(void);
 
+// The strip of recent lightings: small pictures, newest first.
+- (void)setLightingHistory:(NSArray<NSImage *> *)images;
+@property (nonatomic, copy) void (^onPickLighting)(NSInteger index);   // one was clicked
+@property (nonatomic, copy) void (^onKeepLighting)(void);              // "Keep current" was clicked
+
 // Which light the "Light" section edits (0-based).
 @property (nonatomic) int selectedLight;
 

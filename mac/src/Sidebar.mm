@@ -3,6 +3,8 @@
 static const CGFloat kSidebarWidth = 300;
 static const CGFloat kSideMargin = 12;
 static const NSInteger kShapeTagBase = 10000;
+static const int kHistorySlots = 12;       // recent lightings shown
+static const int kHistoryPerRow = 4;
 static const int kNumEditableLights = 5;   // the shaders light the scene with the first five
 
 // A view whose origin is at the top-left, so scrolled content starts at the top.
@@ -52,6 +54,7 @@ typedef NS_ENUM(int, ChangeKind) {
     NSStackView *_shapeSection;   // sliders for the values the current shape declares
     NSMutableArray<SliderEntry *> *_shapeEntries;   // indexed by slider tag - kShapeTagBase
     NSInteger _shapeParamsSeen;   // which version of the renderer's list is on screen
+    NSMutableArray<NSButton *> *_historyButtons;
     NSPopUpButton *_vizPopup;
     NSPopUpButton *_mousePopup;
     NSPopUpButton *_lightPopup;
@@ -300,7 +303,34 @@ static void ColorInto(NSColor *color, f4 *out) {
         [self button:@"Random colour" action:@selector(randomLightColor:)],
         [self button:@"Random direction" action:@selector(randomLightDir:)],
     ]];
-    [self addButtons:@[[self button:@"Randomize all lighting" action:@selector(randomAll:)]]];
+    [self addButtons:@[
+        [self button:@"Randomize all lighting" action:@selector(randomAll:)],
+        [self button:@"Keep current" action:@selector(keepLighting:)],
+    ]];
+
+    // Recent lightings, as small pictures to click.
+    [self addNote:@"Recent lighting (click one to go back to it):"];
+    _historyButtons = [NSMutableArray array];
+    for (int row = 0; row < kHistorySlots / kHistoryPerRow; row++) {
+        NSMutableArray *buttons = [NSMutableArray array];
+        for (int col = 0; col < kHistoryPerRow; col++) {
+            NSButton *b = [NSButton buttonWithTitle:@"" target:self action:@selector(historyClicked:)];
+            b.bordered = NO;
+            b.imagePosition = NSImageOnly;
+            b.imageScaling = NSImageScaleProportionallyUpOrDown;
+            b.tag = (NSInteger)_historyButtons.count;
+            b.hidden = YES;
+            [b.widthAnchor constraintEqualToConstant:63].active = YES;
+            [b.heightAnchor constraintEqualToConstant:42].active = YES;
+            [_historyButtons addObject:b];
+            [buttons addObject:b];
+        }
+        NSStackView *r = [NSStackView stackViewWithViews:buttons];
+        r.orientation = NSUserInterfaceLayoutOrientationHorizontal;
+        r.spacing = 6;
+        r.detachesHiddenViews = YES;
+        [_target addArrangedSubview:r];
+    }
 
     // ---- Ambient occlusion ----
     [self addSection:@"Ambient occlusion"];
@@ -395,6 +425,22 @@ static void ColorInto(NSColor *color, f4 *out) {
     [self noteChange:nil];
     [_renderer resetShapeParams];
     [self refresh];
+}
+
+- (void)setLightingHistory:(NSArray<NSImage *> *)images {
+    for (NSUInteger i = 0; i < _historyButtons.count; i++) {
+        NSButton *b = _historyButtons[i];
+        b.hidden = (i >= images.count);
+        if (i < images.count) b.image = images[i];
+    }
+}
+
+- (void)historyClicked:(NSButton *)b {
+    if (self.onPickLighting) self.onPickLighting(b.tag);
+}
+
+- (void)keepLighting:(id)sender {
+    if (self.onKeepLighting) self.onKeepLighting();
 }
 
 - (void)toggleAdvanced:(NSButton *)b {

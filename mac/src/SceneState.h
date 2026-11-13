@@ -46,8 +46,35 @@ constexpr int   kAmboSamplesPerRayDefault = 64;
 constexpr int   kMaxAmboPasses = AMBO_RAY_DIRS / kAmboRaysPerPassDefault;
 constexpr uint32_t kDefaultSeed = 0x713BF2CE;
 
+// Everything about how the scene is lit (but not its shape or the camera).
+struct Lighting {
+    f4 light_dir[MAX_LIGHTS], light_col[MAX_LIGHTS], light_wrap[MAX_LIGHTS];
+    f4 light_unorm[MAX_LIGHTS], light_spec_scale[MAX_LIGHTS];
+    u4 light_spec_enabled[MAX_LIGHTS];
+    f4 light_unorm_all, fog_color, fog_params;
+    int   useDirectionalAmbo;
+    float amboUnLit, amboFullyLit, amboExponent, amboSpecLo, amboSpecHi, amboDirScale, amboDirBias;
+    float specStr, specPow, scale, sat, reflectivity, surfaceColorAmount, finalGamma;
+    Frame lights[MAX_LIGHTS];
+};
+
 class SceneState {
 public:
+    // A complete copy of the scene, for undo.
+    struct Snapshot {
+        Uniforms cb;
+        Frame camera;
+        Frame lights[MAX_LIGHTS];
+    };
+    // What has to be redone after restoring a snapshot.
+    enum Change { LightingOnly, PictureRestart, NewSeed };
+
+    Snapshot GetSnapshot() const;
+    Change RestoreSnapshot(const Snapshot &snapshot);
+
+    Lighting GetLighting() const;
+    void SetLighting(const Lighting &lighting);
+
     Uniforms  cb;                  // sent to the shaders every frame
     Frame     camera;
     Frame     lights[MAX_LIGHTS];

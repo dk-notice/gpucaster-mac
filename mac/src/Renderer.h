@@ -107,6 +107,8 @@ extern NSString *const kVizModeNames[kNumVizModes];
 - (NSString *)statusText;
 
 // --- Output -----------------------------------------------------------------
+// Small pictures of the current scene under each of the given lightings.
+- (NSArray<NSImage *> *)thumbnailsForLightings:(const std::vector<Lighting> &)lightings width:(int)width;
 - (BOOL)saveImageToPNG:(NSString *)path;
 
 // --- Off-screen use (self-test) ---------------------------------------------

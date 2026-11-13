@@ -11,8 +11,19 @@
 
 #pragma mark - Picture view
 
+// One step of undo history: the whole scene, and which shape it was using.
+@interface UndoEntry : NSObject {
+@public
+    SceneState::Snapshot snapshot;
+}
+@property (nonatomic, copy) NSString *shape;
+@end
+@implementation UndoEntry
+@end
+
 @interface RenderView : MTKView
 @property (nonatomic, weak) Renderer *renderer;
+@property (nonatomic, copy) void (^onWillChange)(NSString *name);   // about to move the camera or a light
 @property (nonatomic, copy) void (^onLightsMoved)(void);
 @end
 
@@ -24,6 +35,11 @@
 - (void)keyDown:(NSEvent *)e {
     if (![NSApp.mainMenu performKeyEquivalent:e]) [super keyDown:e];
 }
+
+- (void)noteChange:(NSString *)name { if (self.onWillChange) self.onWillChange(name); }
+- (void)mouseDown:(NSEvent *)e { [self noteChange:nil]; }
+- (void)rightMouseDown:(NSEvent *)e { [self noteChange:nil]; }
+- (void)otherMouseDown:(NSEvent *)e { [self noteChange:nil]; }
 
 - (void)mouseDragged:(NSEvent *)e {
     NSEventModifierFlags f = e.modifierFlags;
@@ -44,10 +60,15 @@
 
 - (void)scrollWheel:(NSEvent *)e {
     double amount = e.hasPreciseScrollingDeltas ? e.scrollingDeltaY * 0.002 : e.scrollingDeltaY * 0.02;
-    if (amount != 0) [self.renderer dolly:(float)amount];
+    if (amount == 0) return;
+    [self noteChange:@"zoom"];
+    [self.renderer dolly:(float)amount];
 }
 
-- (void)magnifyWithEvent:(NSEvent *)e { [self.renderer dolly:(float)(e.magnification * 0.5)]; }
+- (void)magnifyWithEvent:(NSEvent *)e {
+    [self noteChange:@"zoom"];
+    [self.renderer dolly:(float)(e.magnification * 0.5)];
+}
 
 @end
 
@@ -68,6 +89,17 @@
     NSTextField *_status;
     NSTimer *_timer;
     NSString *_shownError;
+
+    // Undo
+    NSMutableArray<UndoEntry *> *_undo, *_redo;
+    NSString *_lastChangeName;       // for treating one slider drag as one step
+    CFTimeInterval _lastChangeTime;
+
+    // Recent lightings, newest first
+    std::vector<Lighting> _history;
+    BOOL _historyDirty;
+    BOOL _wasFinished;
+    int _tickCount;
 }
 
 - (void)applicationDidFinishLaunching:(NSNotification *)note {
@@ -102,8 +134,17 @@
     _sidebar = [[Sidebar alloc] initWithRenderer:_renderer];
     _sidebar.translatesAutoresizingMaskIntoConstraints = NO;
 
+    _undo = [NSMutableArray array];
+    _redo = [NSMutableArray array];
+
     __weak AppDelegate *weakSelf = self;
     _view.onLightsMoved = ^{ [weakSelf sidebarRefresh]; };
+    _view.onWillChange = ^(NSString *name) { [weakSelf checkpoint:name]; };
+    _sidebar.willChange = ^(NSString *name) { [weakSelf checkpoint:name]; };
+    _sidebar.didRandomizeLighting = ^{ [weakSelf rememberLighting]; };
+    _sidebar.onKeepLighting = ^{ [weakSelf rememberLighting]; };
+    _sidebar.onPickLighting = ^(NSInteger index) { [weakSelf pickLighting:index]; };
+    [self rememberLighting];
     _renderer.onShaderResult = ^(NSString *error) { [weakSelf shaderResult:error]; };
 
     NSView *bar = [self buildToolbar];
@@ -245,6 +286,81 @@
     double p = _renderer.progress;
     _progress.hidden = (p < 0 || finished);
     if (p >= 0) _progress.doubleValue = p;
+
+    // Keep the little lighting pictures up to date: straight away when the
+    // list changes or the picture finishes, and now and then while it builds.
+    _tickCount++;
+    if (!_sidebar.hidden && (_historyDirty || (finished && !_wasFinished) || (!finished && _tickCount % 8 == 0))) {
+        [_sidebar setLightingHistory:[_renderer thumbnailsForLightings:_history width:126]];
+        _historyDirty = NO;
+    }
+    _wasFinished = finished;
+}
+
+#pragma mark - Undo and lighting history
+
+- (UndoEntry *)currentEntry {
+    UndoEntry *e = [UndoEntry new];
+    e->snapshot = _renderer.scene->GetSnapshot();
+    e.shape = _renderer.shapePath;
+    return e;
+}
+
+// Records the scene as it is now, just before something changes it.  Repeated
+// changes with the same name in quick succession (dragging one slider) count
+// as a single step.
+- (void)checkpoint:(NSString *)name {
+    CFTimeInterval now = CACurrentMediaTime();
+    BOOL sameAsLast = name && [name isEqualToString:_lastChangeName] && (now - _lastChangeTime) < 1.0;
+    _lastChangeName = name;
+    _lastChangeTime = now;
+    if (sameAsLast) return;
+    [_undo addObject:[self currentEntry]];
+    if (_undo.count > 200) [_undo removeObjectAtIndex:0];
+    [_redo removeAllObjects];
+}
+
+- (void)applyEntry:(UndoEntry *)e {
+    SceneState::Change change = _renderer.scene->RestoreSnapshot(e->snapshot);
+    BOOL shapeChanged = e.shape && ![e.shape isEqualToString:_renderer.shapePath];
+    if (change == SceneState::NewSeed) [_renderer sceneReplaced];
+    if (shapeChanged) [_renderer selectShape:e.shape keepParamValues:YES];
+    else if (change == SceneState::PictureRestart) [_renderer clearAll];
+    else if (change == SceneState::LightingOnly) [_renderer relight];
+    _lastChangeName = nil;
+    [_sidebar refresh];
+    [self tick];
+}
+
+- (void)undo:(id)sender {
+    if (_undo.count == 0) return;
+    [_redo addObject:[self currentEntry]];
+    UndoEntry *e = _undo.lastObject;
+    [_undo removeLastObject];
+    [self applyEntry:e];
+}
+
+- (void)redo:(id)sender {
+    if (_redo.count == 0) return;
+    [_undo addObject:[self currentEntry]];
+    UndoEntry *e = _redo.lastObject;
+    [_redo removeLastObject];
+    [self applyEntry:e];
+}
+
+// Adds the current lighting to the front of the recent list.
+- (void)rememberLighting {
+    _history.insert(_history.begin(), _renderer.scene->GetLighting());
+    if (_history.size() > 12) _history.resize(12);
+    _historyDirty = YES;
+}
+
+- (void)pickLighting:(NSInteger)index {
+    if (index < 0 || index >= (NSInteger)_history.size()) return;
+    [self checkpoint:nil];
+    _renderer.scene->SetLighting(_history[(size_t)index]);
+    [_renderer relight];
+    [_sidebar refresh];
 }
 
 - (void)sidebarRefresh { [_sidebar refresh]; }
@@ -281,6 +397,12 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     [file addItem:[NSMenuItem separatorItem]];
     [self add:@"Save Image…" to:file action:@selector(saveImage:) key:@"s" mods:cmd];
     [bar addItemWithTitle:@"" action:nil keyEquivalent:@""].submenu = file;
+
+    // Edit
+    NSMenu *edit = [[NSMenu alloc] initWithTitle:@"Edit"];
+    [self add:@"Undo" to:edit action:@selector(undo:) key:@"z" mods:cmd];
+    [self add:@"Redo" to:edit action:@selector(redo:) key:@"z" mods:cmd | shift];
+    [bar addItemWithTitle:@"" action:nil keyEquivalent:@""].submenu = edit;
 
     // Shape (the list of shapes at the top is filled in by -menuNeedsUpdate:)
     NSMenu *shape = [[NSMenu alloc] initWithTitle:@"Shape"];
@@ -384,6 +506,8 @@ static const NSInteger kShapeItemTag = 1000;
         item.state = [item.representedObject isEqual:_renderer.shapePath] ? NSControlStateValueOn : NSControlStateValueOff;
         return YES;
     }
+    if (a == @selector(undo:)) return _undo.count > 0;
+    if (a == @selector(redo:)) return _redo.count > 0;
     if (a == @selector(editShape:) || a == @selector(revealShape:) || a == @selector(newShape:))
         return _renderer.shapePath != nil;
     if (a == @selector(stageMenu:)) {
@@ -411,8 +535,8 @@ static const NSInteger kShapeItemTag = 1000;
 
 #pragma mark - Shape actions
 
-- (void)shapePicked:(NSPopUpButton *)popup { [_renderer selectShape:popup.selectedItem.representedObject]; [self tick]; }
-- (void)shapeMenuPicked:(NSMenuItem *)item { [_renderer selectShape:item.representedObject]; [self tick]; }
+- (void)shapePicked:(NSPopUpButton *)popup { [self checkpoint:nil]; [_renderer selectShape:popup.selectedItem.representedObject]; [self tick]; }
+- (void)shapeMenuPicked:(NSMenuItem *)item { [self checkpoint:nil]; [_renderer selectShape:item.representedObject]; [self tick]; }
 
 - (NSArray<UTType *> *)shapeTypes {
     UTType *t = [UTType typeWithFilenameExtension:@"metal"];
@@ -427,6 +551,7 @@ static const NSInteger kShapeItemTag = 1000;
     if (_renderer.shapesDir) panel.directoryURL = [NSURL fileURLWithPath:_renderer.shapesDir];
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
+        [self checkpoint:nil];
         [self->_renderer selectShape:panel.URL.path];
         [self tick];
     }];
@@ -454,6 +579,7 @@ static const NSInteger kShapeItemTag = 1000;
             });
             return;
         }
+        [self checkpoint:nil];
         [self->_renderer selectShape:dest];
         [self tick];
         [self editShape:nil];
@@ -504,8 +630,8 @@ static const NSInteger kShapeItemTag = 1000;
 - (void)toggleAuto:(id)sender { _renderer.autoEnabled = !_renderer.autoEnabled; [self tick]; }
 - (void)toggleReflection:(id)sender { [_renderer toggleReflection]; [self tick]; }
 - (void)clearScene:(id)sender { [_renderer clearAll]; [self tick]; }
-- (void)randomScene:(id)sender { [_renderer newSeed:_renderer.scene->NewRandomSeed()]; [self tick]; }
-- (void)resetCamera:(id)sender { _renderer.scene->ResetCamera(); [_renderer clearAll]; }
+- (void)randomScene:(id)sender { [self checkpoint:nil]; [_renderer newSeed:_renderer.scene->NewRandomSeed()]; [self tick]; }
+- (void)resetCamera:(id)sender { [self checkpoint:nil]; _renderer.scene->ResetCamera(); [_renderer clearAll]; }
 - (void)reloadShaders:(id)sender { [_renderer reloadShadersInBackground]; [self tick]; }
 
 - (void)shaderResult:(NSString *)error {
@@ -526,12 +652,14 @@ static const NSInteger kShapeItemTag = 1000;
 #pragma mark - Lighting and view actions
 
 - (void)randomLights:(id)sender {
+    [self checkpoint:nil];
     _renderer.scene->RandomizeLights();
     [_renderer relight];
     [_sidebar refresh];
+    [self rememberLighting];
 }
-- (void)brighter:(id)sender { _renderer.scene->cb.kLightScale *= 1.025f; [_renderer relight]; [_sidebar refresh]; }
-- (void)darker:(id)sender { _renderer.scene->cb.kLightScale *= 0.975f; [_renderer relight]; [_sidebar refresh]; }
+- (void)brighter:(id)sender { [self checkpoint:@"brightness"]; _renderer.scene->cb.kLightScale *= 1.025f; [_renderer relight]; [_sidebar refresh]; }
+- (void)darker:(id)sender { [self checkpoint:@"brightness"]; _renderer.scene->cb.kLightScale *= 0.975f; [_renderer relight]; [_sidebar refresh]; }
 
 - (void)mouseTargetMenu:(NSMenuItem *)item {
     _renderer.mouseTarget = (int)item.tag;
@@ -566,6 +694,7 @@ static const NSInteger kShapeItemTag = 1000;
          "P turn the automatic run on or off\n\n"
          "LIGHTING\n"
          "L random lighting, = brighter, - darker\n"
+         "Recent lightings are kept as small pictures in the sidebar. Cmd-Z undoes any change.\n"
          "0 mouse moves camera, 1-5 mouse moves that light, 9 all lights\n\n"
          "Every command is also in the menus, with its shortcut.";
     [a beginSheetModalForWindow:_window completionHandler:nil];
@@ -593,6 +722,7 @@ static const NSInteger kShapeItemTag = 1000;
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         std::string error;
+        [self checkpoint:nil];
         if (!self->_renderer.scene->Import(panel.URL.fileSystemRepresentation, lightsOnly, &error)) {
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self showError:@"The scene could not be opened" detail:@(error.c_str())];
@@ -607,6 +737,7 @@ static const NSInteger kShapeItemTag = 1000;
             NSString *shape = [[panel.URL.path stringByDeletingPathExtension] stringByAppendingPathExtension:@"metal"];
             if ([[NSFileManager defaultManager] fileExistsAtPath:shape]) [self->_renderer selectShape:shape keepParamValues:YES];
         }
+        [self rememberLighting];
         [self->_sidebar refresh];
         [self tick];
     }];
@@ -765,6 +896,48 @@ static int RunSelfTest(NSString *outDir) {
             printf("selftest: Mandelbox centre depth %.4f at scale 2, %.4f at scale -1.5\n", depthA, depthB);
             if (depthA == depthB) { fprintf(stderr, "selftest: changing a shape parameter did not change the picture\n"); failures++; }
         }
+    }
+
+    // Undo snapshots: random lighting and a camera move must be reversible exactly.
+    {
+        SceneState *sc = r.scene;
+        SceneState::Snapshot before = sc->GetSnapshot();
+        sc->RandomizeLights();
+        SceneState::Change c1 = sc->RestoreSnapshot(before);
+        bool same1 = memcmp(&before.cb, &sc->cb, sizeof(Uniforms)) == 0;
+        sc->camera.pos.x += 0.25f;
+        SceneState::Change c2 = sc->RestoreSnapshot(before);
+        uint32_t seed = sc->cb.g_scene_seed;
+        sc->OnSeed(12345);
+        SceneState::Change c3 = sc->RestoreSnapshot(before);
+        bool same3 = memcmp(&before.cb, &sc->cb, sizeof(Uniforms)) == 0 && sc->cb.g_scene_seed == seed;
+        if (!same1 || !same3 || c1 != SceneState::LightingOnly || c2 != SceneState::PictureRestart || c3 != SceneState::NewSeed) {
+            fprintf(stderr, "selftest: undo snapshot did not restore the scene (%d %d %d %d %d)\n", same1, same3, c1, c2, c3);
+            failures++;
+        }
+        [r sceneReplaced];
+
+        // Lighting thumbnails: two different lightings give two different small pictures,
+        // and making them leaves the scene's own lighting untouched.
+        std::vector<Lighting> ls;
+        ls.push_back(sc->GetLighting());
+        Uniforms keep = sc->cb;
+        sc->RandomizeLights();   // (twice: restoring the seed above also rewound the random numbers,
+        sc->RandomizeLights();   //  so the first one repeats the lighting the scene started with)
+        ls.push_back(sc->GetLighting());
+        sc->SetLighting(ls[0]);
+        [r runPasses:10];               // lighting only shows once the surface has normals
+        [r setStage:GenNormals];
+        [r runPasses:2];
+        NSArray<NSImage *> *thumbs = [r thumbnailsForLightings:ls width:126];
+        bool differ = thumbs.count == 2 && ![[thumbs[0] TIFFRepresentation] isEqualToData:[thumbs[1] TIFFRepresentation]];
+        bool untouched = memcmp(keep.g_light_col, sc->cb.g_light_col, sizeof(keep.g_light_col)) == 0;
+        for (NSUInteger i = 0; i < thumbs.count; i++) {
+            NSBitmapImageRep *rep = (NSBitmapImageRep *)thumbs[i].representations.firstObject;
+            [[rep representationUsingType:NSBitmapImageFileTypePNG properties:@{}]
+                writeToFile:[outDir stringByAppendingPathComponent:[NSString stringWithFormat:@"thumb_%d.png", (int)i]] atomically:YES];
+        }
+        if (!differ || !untouched) { fprintf(stderr, "selftest: lighting thumbnails wrong (%d %d)\n", differ, untouched); failures++; }
     }
 
     // Every shape in the shapes folder must compile.

@@ -269,6 +269,101 @@ void SceneState::RebuildLightFrames() {
 }
 
 //--------------------------------------------------------------------------------------
+// Lighting as a unit, and whole-scene snapshots
+//--------------------------------------------------------------------------------------
+Lighting SceneState::GetLighting() const {
+    Lighting l;
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        l.light_dir[i] = cb.g_light_dir[i];
+        l.light_col[i] = cb.g_light_col[i];
+        l.light_wrap[i] = cb.g_light_wrap[i];
+        l.light_unorm[i] = cb.g_light_unorm[i];
+        l.light_spec_scale[i] = cb.g_light_spec_scale[i];
+        l.light_spec_enabled[i] = cb.g_light_spec_enabled[i];
+        l.lights[i] = lights[i];
+    }
+    l.light_unorm_all = cb.g_light_unorm_all;
+    l.fog_color = cb.g_fog_color;
+    l.fog_params = cb.g_fog_params;
+    l.useDirectionalAmbo = cb.kLightUseDirectionalAmbo;
+    l.amboUnLit = cb.kLightAmboDiffuseUnLitThresh;
+    l.amboFullyLit = cb.kLightAmboDiffuseFullyLitThresh;
+    l.amboExponent = cb.kLightAmboDiffuseExponent;
+    l.amboSpecLo = cb.kLightAmboSpecLo;
+    l.amboSpecHi = cb.kLightAmboSpecHi;
+    l.amboDirScale = cb.kLightAmboDirScale;
+    l.amboDirBias = cb.kLightAmboDirBias;
+    l.specStr = cb.kLightSpecStr;
+    l.specPow = cb.kLightSpecPow;
+    l.scale = cb.kLightScale;
+    l.sat = cb.kLightSat;
+    l.reflectivity = cb.kReflectivity;
+    l.surfaceColorAmount = cb.kSurfaceColorAmount;
+    l.finalGamma = cb.kFinalGamma;
+    return l;
+}
+
+void SceneState::SetLighting(const Lighting &l) {
+    for (int i = 0; i < MAX_LIGHTS; i++) {
+        cb.g_light_dir[i] = l.light_dir[i];
+        cb.g_light_col[i] = l.light_col[i];
+        cb.g_light_wrap[i] = l.light_wrap[i];
+        cb.g_light_unorm[i] = l.light_unorm[i];
+        cb.g_light_spec_scale[i] = l.light_spec_scale[i];
+        cb.g_light_spec_enabled[i] = l.light_spec_enabled[i];
+        lights[i] = l.lights[i];
+    }
+    cb.g_light_unorm_all = l.light_unorm_all;
+    cb.g_fog_color = l.fog_color;
+    cb.g_fog_params = l.fog_params;
+    cb.kLightUseDirectionalAmbo = l.useDirectionalAmbo;
+    cb.kLightAmboDiffuseUnLitThresh = l.amboUnLit;
+    cb.kLightAmboDiffuseFullyLitThresh = l.amboFullyLit;
+    cb.kLightAmboDiffuseExponent = l.amboExponent;
+    cb.kLightAmboSpecLo = l.amboSpecLo;
+    cb.kLightAmboSpecHi = l.amboSpecHi;
+    cb.kLightAmboDirScale = l.amboDirScale;
+    cb.kLightAmboDirBias = l.amboDirBias;
+    cb.kLightSpecStr = l.specStr;
+    cb.kLightSpecPow = l.specPow;
+    cb.kLightScale = l.scale;
+    cb.kLightSat = l.sat;
+    cb.kReflectivity = l.reflectivity;
+    cb.kSurfaceColorAmount = l.surfaceColorAmount;
+    cb.kFinalGamma = l.finalGamma;
+}
+
+SceneState::Snapshot SceneState::GetSnapshot() const {
+    Snapshot s;
+    s.cb = cb;
+    s.camera = camera;
+    for (int i = 0; i < MAX_LIGHTS; i++) s.lights[i] = lights[i];
+    return s;
+}
+
+static bool SameFrame(const Frame &a, const Frame &b) {
+    return simd_equal(a.pos, b.pos) && simd_equal(a.x, b.x) && simd_equal(a.y, b.y) && simd_equal(a.z, b.z) && a.fov == b.fov;
+}
+
+SceneState::Change SceneState::RestoreSnapshot(const Snapshot &s) {
+    Change change = LightingOnly;
+    if (!SameFrame(camera, s.camera)) change = PictureRestart;
+    if (memcmp(cb.g_dialog_coeffs, s.cb.g_dialog_coeffs, sizeof(cb.g_dialog_coeffs)) != 0) change = PictureRestart;
+    if (cb.g_scene_seed != s.cb.g_scene_seed) {
+        OnSeed(s.cb.g_scene_seed);   // rebuilds the random values and noise for that seed
+        change = NewSeed;
+    }
+    const uint32_t viz = cb.g_viz_mode;
+    const float aspect = camera.aspect;
+    cb = s.cb;
+    cb.g_viz_mode = viz;             // the view mode isn't part of the scene
+    camera = s.camera;
+    camera.aspect = aspect;          // nor is the window's shape
+    for (int i = 0; i < MAX_LIGHTS; i++) lights[i] = s.lights[i];
+    return change;
+}
+
+//--------------------------------------------------------------------------------------
 // Camera
 //--------------------------------------------------------------------------------------
 void SceneState::UpdateCameraUniforms(int width, int height) {

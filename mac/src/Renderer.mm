@@ -943,6 +943,23 @@ struct IntersectionSet {
     [enc setFragmentBuffer:tiles offset:0 atIndex:1];
 }
 
+// Fills in the values the shaders need that change from frame to frame.
+// 'tilesThisFrame' is how many tiles are about to be drawn.
+- (void)fillFrameUniforms:(int)tilesThisFrame {
+    IntersectionSet *s = _cur;
+    _scene.UpdateCameraUniforms(_width, _height);
+    Uniforms &u = _scene.cb;
+    u.g_cur_ambo_pass = (uint32_t)s->ambo_pass;
+    u.g_main_ambo_pass = (uint32_t)_main.ambo_pass;
+    u.g_refl_ambo_pass = (uint32_t)_refl.ambo_pass;
+    u.g_intersection_set = (s == &_main) ? 0 : 1;
+    u.g_geom_frames_since_geom_clear = (uint32_t)s->geom_passes;
+    u.g_tile_info = simd_make_float4((float)[self tileWidth], (float)[self tileHeight],
+                                     (float)[self tilesAcross], (float)[self tilesDown]);
+    u.g_main_ambo_tiles_done = [self amboTilesDone:&_main extra:(s == &_main ? tilesThisFrame : 0)];
+    u.g_refl_ambo_tiles_done = [self amboTilesDone:&_refl extra:(s == &_refl ? tilesThisFrame : 0)];
+}
+
 // Does one frame's worth of work: up to 'maxTiles' tiles of the current
 // stage, then relights whatever changed.  Returns the number of tiles drawn.
 - (int)stepInto:(id<MTLCommandBuffer>)cb maxTiles:(int)maxTiles {
@@ -964,17 +981,8 @@ struct IntersectionSet {
     if (n > 0 && s->gen == GenAmbo && s->tile == 0) s->ambo_pass++;
 
     // Settings for this frame.
-    _scene.UpdateCameraUniforms(_width, _height);
+    [self fillFrameUniforms:n];
     Uniforms &u = _scene.cb;
-    u.g_cur_ambo_pass = (uint32_t)s->ambo_pass;
-    u.g_main_ambo_pass = (uint32_t)_main.ambo_pass;
-    u.g_refl_ambo_pass = (uint32_t)_refl.ambo_pass;
-    u.g_intersection_set = (s == &_main) ? 0 : 1;
-    u.g_geom_frames_since_geom_clear = (uint32_t)s->geom_passes;
-    u.g_tile_info = simd_make_float4((float)[self tileWidth], (float)[self tileHeight],
-                                     (float)[self tilesAcross], (float)[self tilesDown]);
-    u.g_main_ambo_tiles_done = [self amboTilesDone:&_main extra:(s == &_main ? n : 0)];
-    u.g_refl_ambo_tiles_done = [self amboTilesDone:&_refl extra:(s == &_refl ? n : 0)];
     id<MTLBuffer> ubuf = [_device newBufferWithBytes:&u length:sizeof(u) options:MTLResourceStorageModeShared];
 
     // Fresh random numbers for every tile.
@@ -1138,6 +1146,73 @@ struct IntersectionSet {
     *normal = simd_make_float4(n[0], n[1], n[2], n[3]) / 32767.0f;
     const _Float16 *a = (const _Float16 *)(p + 32);
     *ambo = simd_make_float4((float)a[0], (float)a[1], (float)a[2], (float)a[3]);
+}
+
+// Small pictures of the current scene under each of the given lightings.
+// All are drawn in one go, so the app pauses only briefly.
+- (NSArray<NSImage *> *)thumbnailsForLightings:(const std::vector<Lighting> &)lightings width:(int)width {
+    NSMutableArray<NSImage *> *images = [NSMutableArray array];
+    if (!_pipelines || !_main.initialized || lightings.empty() || _width <= 0) return images;
+    const int w = MAX(16, width), h = MAX(10, (int)lround((double)w * _height / _width));
+
+    const Lighting saved = _scene.GetLighting();
+    const uint32_t savedViz = _scene.cb.g_viz_mode;
+    id<MTLBuffer> tbuf = [_device newBufferWithLength:kTileStride options:MTLResourceStorageModeShared];
+    id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    NSMutableArray<id<MTLTexture>> *targets = [NSMutableArray array];
+    for (const Lighting &l : lightings) {
+        _scene.SetLighting(l);
+        [self fillFrameUniforms:0];
+        Uniforms u = _scene.cb;
+        u.g_viz_mode = 0;
+        u.g_image_size.z = 1.0f / w;   // the shader turns pixel positions into 0..1 with these
+        u.g_image_size.w = 1.0f / h;
+        id<MTLBuffer> ubuf = [_device newBufferWithBytes:&u length:sizeof(u) options:MTLResourceStorageModeShared];
+
+        MTLTextureDescriptor *td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:w height:h mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = _device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+        id<MTLTexture> target = [_device newTextureWithDescriptor:td];
+        [targets addObject:target];
+
+        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
+        rp.colorAttachments[0].texture = target;
+        rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:_pipelines.relight];
+        [self bindScene:enc target:target forRelight:YES uniforms:ubuf tiles:tbuf];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [enc endEncoding];
+        if (target.storageMode == MTLStorageModeManaged) {
+            id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+            [blit synchronizeResource:target];
+            [blit endEncoding];
+        }
+    }
+    _scene.SetLighting(saved);
+    _scene.cb.g_viz_mode = savedViz;
+    [cb commit];
+    [cb waitUntilCompleted];
+
+    for (id<MTLTexture> target in targets) {
+        NSBitmapImageRep *rep = [[NSBitmapImageRep alloc] initWithBitmapDataPlanes:NULL pixelsWide:w pixelsHigh:h
+                                                                     bitsPerSample:8 samplesPerPixel:4 hasAlpha:YES isPlanar:NO
+                                                                    colorSpaceName:NSDeviceRGBColorSpace bytesPerRow:w * 4 bitsPerPixel:32];
+        uint8_t *px = rep.bitmapData;
+        [target getBytes:px bytesPerRow:(NSUInteger)w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+        for (int i = 0; i < w * h; i++) {   // BGRA -> RGBA
+            uint8_t b = px[i * 4];
+            px[i * 4] = px[i * 4 + 2];
+            px[i * 4 + 2] = b;
+            px[i * 4 + 3] = 255;
+        }
+        NSImage *image = [[NSImage alloc] initWithSize:NSMakeSize(w / 2.0, h / 2.0)];
+        [image addRepresentation:rep];
+        [images addObject:image];
+    }
+    return images;
 }
 
 - (BOOL)saveImageToPNG:(NSString *)path {
