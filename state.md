@@ -74,6 +74,8 @@ there using the shaders inside the app; its signature verifies and its window op
 
 ## Not yet verified (needs a person at the window)
 
+- The new suggested names as they appear in the real save dialogs, and the export
+  name following the Size pop-up.
 - (The user tried all five Experimental options, including how Extended brightness
   and MetalFX look, and confirmed they work as expected, 2026-11-12.)
 
@@ -167,6 +169,12 @@ the assistant on this Mac, which is why the layout snapshot exists.
 - The Experimental options are remembered as app preferences (not in scene files)
   and read by the app at launch, not by the renderer, so tests and command-line
   renders are unaffected.
+- Suggested file names are "<Shape> <yyyy-MM-dd> at <HH.mm.ss>" for images and
+  scenes, with " (W × H)" added for large exports (following the Size pop-up until
+  the name is typed over). Chosen so names are unique without inspecting folders,
+  and so the companion `.scn` and `.metal` files, which are replaced without a
+  warning, never collide (user, 2026-11-12). The seed is no longer in the name; it
+  is stored inside the scene file.
 - Exports are always accurate (user, 2026-11-12: people will design a scene with the
   fast options and export later at high resolution). They are sized from the
   window's screen pixels, so Half detail does not shrink them, and the export copy

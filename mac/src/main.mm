@@ -76,6 +76,8 @@
 #pragma mark - App
 
 @interface AppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate>
++ (NSString *)uniqueNameStemForShape:(NSString *)shapePath date:(NSDate *)date;
++ (NSString *)exportNameForStem:(NSString *)stem width:(int)width height:(int)height;
 @end
 
 @implementation AppDelegate {
@@ -99,6 +101,9 @@
     // Large image export
     Renderer *_exporter;             // builds the big picture; nil when not exporting
     NSString *_exportPath;
+    NSSavePanel *_exportPanel;       // the export's save dialog, while it is open
+    NSString *_exportNameStem;       // "Mandelbox 2026-11-12 at 19.42.07", fixed when the dialog opened
+    NSString *_exportNameSuggested;  // the last name the app put in the dialog
     NSPanel *_exportSheet;
     NSProgressIndicator *_exportBar;
     NSTextField *_exportLabel;
@@ -839,6 +844,21 @@ static const NSInteger kShapeItemTag = 1000;
     [a beginSheetModalForWindow:_window completionHandler:nil];
 }
 
+// A name for a new file that won't clash with an earlier one: the shape's
+// name, then the date and time, in the style macOS uses for screenshots.
+// e.g. "Mandelbox 2026-11-12 at 19.42.07"
++ (NSString *)uniqueNameStemForShape:(NSString *)shapePath date:(NSDate *)date {
+    NSDateFormatter *f = [NSDateFormatter new];
+    f.locale = [NSLocale localeWithLocaleIdentifier:@"en_US_POSIX"];   // the same layout whatever the Mac's region
+    f.dateFormat = @"yyyy-MM-dd 'at' HH.mm.ss";
+    NSString *shape = shapePath ? [Renderer displayNameForShape:shapePath] : @"Gpucaster";
+    return [NSString stringWithFormat:@"%@ %@", shape, [f stringFromDate:date]];
+}
+
+- (NSString *)uniqueNameStem {
+    return [AppDelegate uniqueNameStemForShape:_renderer.shapePath date:[NSDate date]];
+}
+
 - (NSArray<UTType *> *)sceneTypes {
     UTType *t = [UTType typeWithFilenameExtension:@"scn"];
     return t ? @[t] : @[];
@@ -877,7 +897,7 @@ static const NSInteger kShapeItemTag = 1000;
 - (void)saveScene:(id)sender {
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.allowedContentTypes = [self sceneTypes];
-    panel.nameFieldStringValue = @"scene.scn";
+    panel.nameFieldStringValue = [[self uniqueNameStem] stringByAppendingPathExtension:@"scn"];
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         std::string error;
@@ -896,7 +916,7 @@ static const NSInteger kShapeItemTag = 1000;
 - (void)saveImage:(id)sender {
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.allowedContentTypes = @[UTTypePNG];
-    panel.nameFieldStringValue = [NSString stringWithFormat:@"gpucaster_%08x.png", _renderer.scene->cb.g_scene_seed];
+    panel.nameFieldStringValue = [[self uniqueNameStem] stringByAppendingPathExtension:@"png"];
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
         NSString *path = panel.URL.path;
@@ -933,21 +953,46 @@ static const NSInteger kShapeItemTag = 1000;
         return;
     }
     [sizes selectItemAtIndex:MIN(2, sizes.numberOfItems - 1)];
+    sizes.target = self;
+    sizes.action = @selector(exportSizeChanged:);
     NSTextField *label = [NSTextField labelWithString:@"Size:"];
     NSStackView *accessory = [NSStackView stackViewWithViews:@[label, sizes]];
     accessory.edgeInsets = NSEdgeInsetsMake(8, 12, 8, 12);
 
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.allowedContentTypes = @[UTTypePNG];
-    panel.nameFieldStringValue = [NSString stringWithFormat:@"gpucaster_%08x_large.png", _renderer.scene->cb.g_scene_seed];
+    // The suggested name includes the picture's size, and follows the Size
+    // pop-up until the name is edited by hand.
+    _exportPanel = panel;
+    _exportNameStem = [self uniqueNameStem];
+    _exportNameSuggested = nil;
+    [self exportSizeChanged:sizes];
     panel.message = @"The picture is built again at the larger size, using the Quality settings in the sidebar. Exports always use full accuracy, whatever the Experimental options are set to.";
     panel.accessoryView = accessory;
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
+        self->_exportPanel = nil;
         if (r != NSModalResponseOK) return;
         int m = (int)sizes.selectedItem.tag;
         NSString *path = panel.URL.path;
         dispatch_async(dispatch_get_main_queue(), ^{ [self startExportWidth:w * m height:h * m path:path]; });
     }];
+}
+
++ (NSString *)exportNameForStem:(NSString *)stem width:(int)width height:(int)height {
+    return [NSString stringWithFormat:@"%@ (%d × %d).png", stem, width, height];
+}
+
+- (void)exportSizeChanged:(NSPopUpButton *)sizes {
+    NSSavePanel *panel = _exportPanel;
+    if (!panel) return;
+    // Leave the name alone if it has been typed over.
+    if (_exportNameSuggested && ![panel.nameFieldStringValue isEqualToString:_exportNameSuggested] &&
+        ![[panel.nameFieldStringValue stringByAppendingPathExtension:@"png"] isEqualToString:_exportNameSuggested])
+        return;
+    const int m = (int)sizes.selectedItem.tag;
+    const int w = (int)_view.drawableSize.width * m, h = (int)_view.drawableSize.height * m;
+    _exportNameSuggested = [AppDelegate exportNameForStem:_exportNameStem width:w height:h];
+    panel.nameFieldStringValue = _exportNameSuggested;
 }
 
 - (void)startExportWidth:(int)width height:(int)height path:(NSString *)path {
@@ -1482,6 +1527,22 @@ static int RunSelfTest(NSString *outDir) {
         BOOL sameSettings = draft.fastMath && draft.skipEmptySky && !exported.fastMath && !exported.skipEmptySky && !exported.lastError;
         printf("selftest: export from a draft preview: accurate settings %d, centre depth %.4f against %.4f normally\n", sameSettings, de, dn);
         if (!sameSettings || !(de > 0) || de != dn) { fprintf(stderr, "selftest: exports are not using full accuracy\n"); failures++; }
+    }
+
+    // Suggested file names: shape, date and time, so they don't repeat.
+    {
+        NSDateComponents *c = [NSDateComponents new];
+        c.year = 2026; c.month = 11; c.day = 12; c.hour = 19; c.minute = 42; c.second = 7;
+        NSDate *when = [[NSCalendar currentCalendar] dateFromComponents:c];
+        NSString *stem = [AppDelegate uniqueNameStemForShape:@"/somewhere/fractal_dodecahedron.metal" date:when];
+        NSString *later = [AppDelegate uniqueNameStemForShape:@"/somewhere/fractal_dodecahedron.metal" date:[when dateByAddingTimeInterval:1]];
+        NSString *big = [AppDelegate exportNameForStem:stem width:7840 height:5792];
+        printf("selftest: suggested names \"%s\" and \"%s\"\n", stem.UTF8String, big.UTF8String);
+        if (![stem isEqualToString:@"Fractal dodecahedron 2026-11-12 at 19.42.07"] || [stem isEqualToString:later] ||
+            ![big isEqualToString:@"Fractal dodecahedron 2026-11-12 at 19.42.07 (7840 × 5792).png"]) {
+            fprintf(stderr, "selftest: suggested file names are wrong\n");
+            failures++;
+        }
     }
 
     // Every shape in the shapes folder must compile.

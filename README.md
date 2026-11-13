@@ -110,6 +110,8 @@ Shape File opens one from anywhere.
 | Mandelbox | Ropey planet |
 | Mandelbulb | Sphere on plane |
 
+Save dialogs suggest a name made from the shape and the date and time, such as
+`Mandelbox 2026-11-12 at 19.42.07.png`, so files don't replace each other.
 Saving a scene or an image also saves a copy of the shape beside it with the
 same name (`name.scn` and `name.metal`), and opening a scene loads the shape
 beside it if there is one. A scene from the Windows version has no shape file,
