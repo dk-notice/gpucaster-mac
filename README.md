@@ -80,6 +80,9 @@ inside the app.
     displays that support it.
 - **File > Export Large Image** builds the picture again at up to sixteen times
   the window's size, limited by the graphics card's memory, and saves a PNG.
+  Exports always render at full detail and full accuracy, whatever the
+  Experimental options are set to, so you can design a scene with the fast
+  options on and export the finished picture afterwards.
 - Every command is in the menus with its shortcut. The single-key shortcuts of
   the Windows version (G, N, A, Esc, L, C, R, F, 0-9, F1, F2) still work, for
   running stages by hand.

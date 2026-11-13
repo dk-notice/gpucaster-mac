@@ -152,7 +152,10 @@ extern NSString *const kVizModeNames[kNumVizModes];
 // Whether this Mac's graphics card can hold a picture of this size.
 - (BOOL)canRenderWidth:(int)width height:(int)height;
 // A separate renderer with a copy of this one's scene, shape and quality
-// settings, set up to build the same picture at another size by itself.
+// settings, set up to build the same picture at another size by itself.  It
+// always renders accurately: Fast math and Skip empty sky are off in the copy
+// whatever this renderer is using (accurate shaders are compiled if needed,
+// which can take a few seconds; -lastError on the copy is set if that fails).
 - (Renderer *)exportCopyWithWidth:(int)width height:(int)height;
 // Does a slice of work without waiting for it; calls back on the main thread
 // with how long the graphics card took.

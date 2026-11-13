@@ -520,7 +520,7 @@ static void ColorInto(NSColor *color, f4 *out) {
 
     // ---- Experimental (hidden until asked for) ----
     [self beginDisclosure:@"Experimental"];
-    [self addWrappedNote:@"Options that are off by default: most trade a little accuracy for speed. They are remembered between launches but are not saved in scenes, and large exports always use full detail."];
+    [self addWrappedNote:@"Options that are off by default: most trade a little accuracy for speed. They are remembered between launches but are not saved in scenes. Large exports ignore them and always render at full detail and full accuracy, so you can design with them on and export the finished picture."];
     _speedLabel = [self label:@"Speed: not measured yet" bold:NO];
     _speedLabel.textColor = NSColor.labelColor;
     _speedLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];

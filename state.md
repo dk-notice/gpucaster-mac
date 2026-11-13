@@ -74,8 +74,8 @@ there using the shaders inside the app; its signature verifies and its window op
 
 ## Not yet verified (needs a person at the window)
 
-- The Experimental toggles under a mouse, and above all how Extended brightness and
-  MetalFX sharpening look on the real display.
+- (The user tried all five Experimental options, including how Extended brightness
+  and MetalFX look, and confirmed they work as expected, 2026-11-12.)
 
 - The light direction ball: dragging dots, double-click to flip, clicking the ball
   to move the selected light. Light rows: selecting, on/off ticks. The hold-down
@@ -164,10 +164,14 @@ the assistant on this Mac, which is why the layout snapshot exists.
 - The sidebar's "Mouse moves" pop-up is gone; dragging lights in the picture is still
   available from the Lighting menu and keys 0, 1-5 and 9, and the status line says
   when it is on.
-- Half detail and Fast math are remembered as app preferences (not in scene files)
+- The Experimental options are remembered as app preferences (not in scene files)
   and read by the app at launch, not by the renderer, so tests and command-line
-  renders are unaffected. Exports are sized from the window's screen pixels, so
-  Half detail does not shrink them; they do inherit Fast math.
+  renders are unaffected.
+- Exports are always accurate (user, 2026-11-12: people will design a scene with the
+  fast options and export later at high resolution). They are sized from the
+  window's screen pixels, so Half detail does not shrink them, and the export copy
+  switches Fast math and Skip empty sky off, compiling accurate shaders first if the
+  window was using fast math. MetalFX and Extended brightness only affect the window.
 - Shader compiles start immediately and run side by side; only the newest request's
   result is used. Whether a shape's slider values are kept or reset is decided from
   the file the shaders were actually compiled from.

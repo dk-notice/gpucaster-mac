@@ -940,7 +940,7 @@ static const NSInteger kShapeItemTag = 1000;
     NSSavePanel *panel = [NSSavePanel savePanel];
     panel.allowedContentTypes = @[UTTypePNG];
     panel.nameFieldStringValue = [NSString stringWithFormat:@"gpucaster_%08x_large.png", _renderer.scene->cb.g_scene_seed];
-    panel.message = @"The picture is built again at the larger size, using the Quality settings in the sidebar.";
+    panel.message = @"The picture is built again at the larger size, using the Quality settings in the sidebar. Exports always use full accuracy, whatever the Experimental options are set to.";
     panel.accessoryView = accessory;
     [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
         if (r != NSModalResponseOK) return;
@@ -952,6 +952,12 @@ static const NSInteger kShapeItemTag = 1000;
 
 - (void)startExportWidth:(int)width height:(int)height path:(NSString *)path {
     _exporter = [_renderer exportCopyWithWidth:width height:height];
+    if (_exporter.lastError) {
+        NSString *why = _exporter.lastError;
+        _exporter = nil;
+        [self showError:@"The export could not be prepared" detail:why];
+        return;
+    }
     _exportPath = path;
     _exportCancelled = NO;
     _exportTiles = 4;
@@ -1449,6 +1455,33 @@ static int RunSelfTest(NSString *outDir) {
             fprintf(stderr, "selftest: extended brightness is not working\n");
             failures++;
         }
+    }
+
+    // Exports are always accurate: a renderer previewing with Fast math and
+    // Skip empty sky must hand an export copy that uses neither, and that copy
+    // must find the same surface as a normal renderer.
+    if (defaultShape) {
+        Renderer *draft = [[Renderer alloc] initWithDevice:device];
+        draft.autoGeomPasses = 30;
+        draft.autoAmboPasses = 4;
+        draft.skipEmptySky = YES;
+        draft.fastMath = YES;
+        NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:60];
+        do { [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]]; } while (draft.compiling && [limit timeIntervalSinceNow] > 0);
+        [draft setImageWidth:240 height:150];
+        Renderer *exported = [draft exportCopyWithWidth:480 height:300];
+        Renderer *normal = [[Renderer alloc] initWithDevice:device];
+        normal.autoGeomPasses = 30;
+        normal.autoAmboPasses = 4;
+        [normal setImageWidth:480 height:300];
+        [exported runUntilFinished:200];
+        [normal runUntilFinished:200];
+        float de = 0, dn = 0; simd_float4 n, am;
+        [exported readPixelX:240 y:200 depth:&de normal:&n ambo:&am];
+        [normal readPixelX:240 y:200 depth:&dn normal:&n ambo:&am];
+        BOOL sameSettings = draft.fastMath && draft.skipEmptySky && !exported.fastMath && !exported.skipEmptySky && !exported.lastError;
+        printf("selftest: export from a draft preview: accurate settings %d, centre depth %.4f against %.4f normally\n", sameSettings, de, dn);
+        if (!sameSettings || !(de > 0) || de != dn) { fprintf(stderr, "selftest: exports are not using full accuracy\n"); failures++; }
     }
 
     // Every shape in the shapes folder must compile.

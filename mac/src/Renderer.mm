@@ -180,9 +180,19 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         _shapePath = o.shapePath;
         _shaderStamp = o->_shaderStamp;
         _shapeParams = o.shapeParams;
-        _fastMath = o->_fastMath;
-        _skipEmptySky = o->_skipEmptySky;
+        // An export is the finished picture, so it never uses the shortcuts the
+        // window may be previewing with: no fast math, no skipping of empty sky.
+        _fastMath = NO;
+        _skipEmptySky = NO;
         _pipelines = o->_pipelines;
+        _adoptedShapePath = o->_adoptedShapePath;
+        if (o->_fastMath) {
+            // The window's shaders were compiled with fast math; compile accurate ones for the export.
+            NSString *err = nil;
+            Pipelines *accurate = [Renderer buildPipelinesWithDevice:_device dir:_shaderDir shape:_shapePath fastMath:NO error:&err];
+            if (accurate) _pipelines = accurate;
+            else self.lastError = err;
+        }
         _scene = o->_scene;
         _scene.cb.g_viz_mode = 0;
         _linearWrap = o->_linearWrap;
