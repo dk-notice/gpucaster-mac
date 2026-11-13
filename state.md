@@ -108,8 +108,8 @@ the assistant on this Mac, which is why the layout snapshot exists.
   the first was still compiling gave the second shape the first one's slider values
   (matched by name and clamped), so it drew wrongly or looked empty. Separately, the
   tile budget learned on a cheap shape could make an expensive one draw a whole pass
-  in a single frame, stalling the app. Both fixed; the first has a test. Not yet
-  confirmed by the user that this was everything they saw.
+  in a single frame, stalling the app. Both fixed; the first has a test. The user
+  confirmed shape switching works afterwards.
 
 ## Known gaps
 
@@ -124,7 +124,6 @@ the assistant on this Mac, which is why the layout snapshot exists.
 
 1. User tries the new controls; fix whatever doesn't feel right.
 2. Packaging: icon, shaders inside the app, a home for user shapes.
-3. Push to GitHub when the user says so (local commits are ahead of the remote).
 
 ## Repository
 
