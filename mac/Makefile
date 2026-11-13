@@ -11,7 +11,7 @@
 # When run from here, it uses the shaders folder beside it instead, so the
 # originals can be edited.
 
-VERSION := 1.1
+VERSION := 1.2
 
 APP := build/Gpucaster.app
 BIN := $(APP)/Contents/MacOS/Gpucaster

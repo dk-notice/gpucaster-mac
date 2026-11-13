@@ -25,7 +25,7 @@ Last updated: 2026-11-12
 - Scene files (`.scn`) use the Windows version's format. Saving a scene or image
   also writes the shape beside it as `name.metal`; opening a scene picks that up.
 - An idle app uses no graphics card time.
-- Experimental section (after 1.1, collapsed at the bottom of the sidebar): a live
+- Experimental section (new in 1.2, collapsed at the bottom of the sidebar): a live
   speed reading in passes per second and five toggles, all app preferences, off by
   default, not saved in scenes: Half detail (render at half the window's resolution
   and enlarge), Sharpen Half detail with MetalFX (Apple's spatial upscaler), Skip
@@ -39,7 +39,7 @@ Last updated: 2026-11-12
   hold-down button shows the selected light alone.
 - Packaged as a self-contained, double-clickable app with an icon and the shaders
   inside it. `make dist` produces `mac/build/Gpucaster-<version>.zip`. Current
-  version: 1.1 (set in `mac/Makefile` and `mac/Info.plist`).
+  version: 1.2 (set in `mac/Makefile` and `mac/Info.plist`).
 - Your own shapes live in `~/Documents/Gpucaster Shapes`, listed below the built-in
   ones. Built-in shapes inside a packaged app are read-only; Edit offers a copy.
 - A command-line mode renders a picture without a window (`--render`, see README).
@@ -220,10 +220,13 @@ the assistant on this Mac, which is why the layout snapshot exists.
 
 ## Next steps
 
-Releases so far: 1.0 (the finished port) and 1.1 (lights shown by direction with a
+Releases so far: 1.0 (the finished port), 1.1 (lights shown by direction with a
 direction ball, brightness slider and solo; colour picker fix; about twice the
-rendering speed). New work continues on `main`; later milestones get their own
-tags. Ideas not yet started:
+rendering speed) and 1.2 (the Experimental options, exports that are always
+accurate, file names from shape and date). Versioning: new features that keep old
+scenes and shapes working are a minor version; fixes only would be a patch (1.2.1);
+a change that breaks old files would be 2.0. Released versions are never altered.
+New work continues on `main`. Ideas not yet started:
 
 1. Possible bigger changes discussed but not started: running the stages as compute
    shaders (a replacement engine, not a toggle), and compiling the shape separately
@@ -236,8 +239,8 @@ tags. Ideas not yet started:
 
 - Published at https://github.com/dk-notice/gpucaster-mac (public). It holds only the
   Mac port (`mac/`), `README.md` and this file.
-- Tags `v1.0` and `v1.1`, each with a GitHub Release carrying the app zip.
-- Version 1.1 is installed on this Mac at `/Applications/Gpucaster.app` (copied from
+- Tags `v1.0`, `v1.1` and `v1.2`, each with a GitHub Release carrying the app zip.
+- Version 1.2 is installed on this Mac at `/Applications/Gpucaster.app` (copied from
   the release zip, 2026-11-12). It is separate from the development build in
   `mac/build/`, which is what `make run` opens. The installed copy has no
   diagnostic log; that is on only when running from the source folder.
