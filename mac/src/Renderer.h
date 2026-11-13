@@ -80,6 +80,7 @@ extern NSString *const kVizModeNames[kNumVizModes];
 - (float)valueOfParam:(ShapeParam *)param;
 - (void)setValue:(float)value ofParam:(ShapeParam *)param;         // then starts the picture again
 - (void)resetShapeParams;
++ (NSArray<ShapeParam *> *)paramsInShape:(NSString *)path;       // the adjustable values a shape file declares
 + (NSString *)displayNameForShape:(NSString *)path;            // "fractal_dodecahedron.metal" -> "Fractal dodecahedron"
 // Compiles a shape without using it.  Returns nil if it is fine, else the error.
 - (NSString *)compileErrorForShape:(NSString *)path;

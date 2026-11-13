@@ -1125,6 +1125,46 @@ static int RunSelfTest(NSString *outDir) {
         }
     }
 
+    // Switching shapes the way the app does (compiling in the background):
+    // after each switch the renderer must be using the new shape's own
+    // parameters at their default values - including when a second shape is
+    // picked before the first has finished compiling.
+    if (defaultShape) {
+        Renderer *sw = [[Renderer alloc] initWithDevice:device];
+        [sw setImageWidth:320 height:200];
+        auto waitForCompile = ^{
+            NSDate *limit = [NSDate dateWithTimeIntervalSinceNow:60];
+            do {
+                [[NSRunLoop mainRunLoop] runUntilDate:[NSDate dateWithTimeIntervalSinceNow:0.02]];
+            } while (sw.compiling && [limit timeIntervalSinceNow] > 0);
+        };
+        auto check = ^BOOL(NSString *path, NSString *what) {
+            NSArray<ShapeParam *> *want = [Renderer paramsInShape:path];
+            BOOL ok = !sw.lastError && [sw.shapePath isEqualToString:path] && sw.shapeParams.count == want.count;
+            for (NSUInteger i = 0; ok && i < want.count; i++) {
+                ShapeParam *have = sw.shapeParams[i];
+                ok = [have.name isEqualToString:want[i].name] && [sw valueOfParam:have] == want[i].defaultValue;
+            }
+            if (!ok) fprintf(stderr, "selftest: after %s, %s is not loaded with its defaults\n", what.UTF8String, path.lastPathComponent.UTF8String);
+            return ok;
+        };
+        NSArray<NSString *> *shapes = [sw availableShapes];
+        int bad = 0;
+        for (NSString *path in shapes) {            // one at a time
+            [sw selectShape:path];
+            waitForCompile();
+            if (!check(path, @"a switch")) bad++;
+        }
+        for (NSUInteger i = 0; i + 1 < shapes.count; i++) {   // two in quick succession
+            [sw selectShape:shapes[i]];
+            [sw selectShape:shapes[i + 1]];
+            waitForCompile();
+            if (!check(shapes[i + 1], @"a quick double switch")) bad++;
+        }
+        printf("selftest: shape switching, %d problems\n", bad);
+        if (bad) failures++;
+    }
+
     // Every shape in the shapes folder must compile.
     if (defaultShape) {
         NSArray<NSString *> *shapes = [r availableShapes];

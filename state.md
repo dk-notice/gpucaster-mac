@@ -38,6 +38,8 @@ Last updated: 2026-11-12
 - Lighting thumbnails differ for different lightings and leave the scene untouched.
 - Large export: a copy renders at twice the size and saves a PNG of the right size.
 - Every file in the shapes folder compiles.
+- Shape switching with background compiling: each shape loads with its own
+  parameters at their defaults, including when two are picked in quick succession.
 - Scene files survive save and reload.
 
 Also checked by hand-run commands: every shape renders when selected, a shape file
@@ -94,6 +96,20 @@ the assistant on this Mac, which is why the layout snapshot exists.
   Because the scene seed also seeds the lighting generator, restoring a seed (undo,
   or opening a scene) makes the next random lightings repeat from the start.
 - Per-tile random numbers use their own generator.
+- Shader compiles start immediately and run side by side; only the newest request's
+  result is used. Whether a shape's slider values are kept or reset is decided from
+  the file the shaders were actually compiled from.
+- The tiles-per-frame budget is learned separately for geometry, normals and ambient
+  occlusion, and starts again from one tile whenever new shaders are adopted.
+
+## Fixed problems worth remembering
+
+- Shape switching (reported by the user, 2026-11-12): picking a second shape while
+  the first was still compiling gave the second shape the first one's slider values
+  (matched by name and clamped), so it drew wrongly or looked empty. Separately, the
+  tile budget learned on a cheap shape could make an expensive one draw a whole pass
+  in a single frame, stalling the app. Both fixed; the first has a test. Not yet
+  confirmed by the user that this was everything they saw.
 
 ## Known gaps
 

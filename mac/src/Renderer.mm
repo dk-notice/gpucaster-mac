@@ -30,6 +30,7 @@ static const uint32_t CLEAR_GEOM = 1, CLEAR_NORM = 2, CLEAR_AMBO = 4, CLEAR_ALL 
 @interface Pipelines : NSObject
 @property (nonatomic, strong) id<MTLRenderPipelineState> geom, norm, ambo, relight, display;
 @property (nonatomic, strong) NSArray<ShapeParam *> *params;
+@property (nonatomic, copy) NSString *shapePath;   // the shape file these were compiled from
 @end
 @implementation Pipelines
 @end
@@ -84,10 +85,13 @@ struct IntersectionSet {
     BOOL _autoActive;
     BOOL _autoFinishedMain;        // the automatic run completed the primary rays
     int _amboTarget;               // ambient passes to reach for the primary rays (grows with "refine more")
-    BOOL _reloadPending;
-    BOOL _resetParamsOnLoad;       // the user picked a different shape: start from its defaults
-    BOOL _keepParamSlotsOnLoad;    // values were just loaded from a scene file: leave them alone
-    double _tilesPerFrame;
+    NSUInteger _compileGeneration; // counts compile requests; only the newest one's result is used
+    int _compilesInFlight;
+    NSString *_adoptedShapePath;   // the shape the shaders in use were compiled from
+    NSString *_keepSlotsForShape;  // a scene file just supplied the values for this shape: leave them alone
+    // How many tiles to draw per frame, learned separately for each stage
+    // (geometry, normals, ambient occlusion), because their costs differ hugely.
+    double _tilesForStage[3];
     NSTimeInterval _shaderStamp;
     std::mt19937 _timeRng;
 }
@@ -103,7 +107,7 @@ struct IntersectionSet {
         _autoGeomPasses = 40;
         _autoAmboPasses = 16;
         _amboTarget = _autoAmboPasses;
-        _tilesPerFrame = 4;
+        [self forgetTileBudgets];
         _shaderDir = [Renderer findShaderDir];
         _shapePath = [self initialShape];
         _shaderStamp = [self latestShaderModification];
@@ -148,7 +152,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         _autoGeomPasses = o.autoGeomPasses;
         _autoAmboPasses = o.autoAmboPasses;
         _amboTarget = _autoAmboPasses;
-        _tilesPerFrame = 4;
+        [self forgetTileBudgets];
         _shaderDir = o.shaderDir;
         _shapePath = o.shapePath;
         _shaderStamp = o->_shaderStamp;
@@ -357,20 +361,33 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
     p.relight = states[3];
     p.display = states[4];
     p.params = params;
+    p.shapePath = shapePath;
     return p;
+}
+
+// Goes back to drawing one tile per frame until the cost of the current
+// shaders has been measured.  Without this, a cheap shape followed by an
+// expensive one would try to draw a whole pass in a single frame.
+- (void)forgetTileBudgets {
+    for (double &t : _tilesForStage) t = 1;
 }
 
 // Starts using freshly compiled shaders, and sets up the shape's adjustable values.
 - (void)adoptPipelines:(Pipelines *)p {
     // Work out every value first, then store them, so that parameters whose
     // storage slots have moved don't trample each other.
+    // Decided from which file the new shaders were actually compiled from,
+    // not from what has been clicked since, so that picking shapes in quick
+    // succession can't hand one shape another's values.
+    const BOOL sameShape = _adoptedShapePath && [p.shapePath isEqualToString:_adoptedShapePath];
+    const BOOL keepSlots = _keepSlotsForShape && [p.shapePath isEqualToString:_keepSlotsForShape];
     NSArray<ShapeParam *> *old = self.shapeParams;
     NSMutableArray<NSNumber *> *values = [NSMutableArray array];
     for (ShapeParam *param in p.params) {
-        float value = param.defaultValue;
-        if (_keepParamSlotsOnLoad) {
+        float value = param.defaultValue;                    // a different shape starts from its defaults
+        if (keepSlots) {
             value = [self valueOfParam:param];               // came from a scene file: leave it alone
-        } else if (!_resetParamsOnLoad) {
+        } else if (sameShape) {
             // The same file was edited and saved: keep each value that still exists, by name.
             for (ShapeParam *o in old) {
                 if ([o.name isEqualToString:param.name]) value = [self valueOfParam:o];
@@ -380,8 +397,9 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         [values addObject:@(value)];
     }
     for (NSUInteger i = 0; i < p.params.count; i++) [self storeValue:values[i].floatValue ofParam:p.params[i]];
-    _resetParamsOnLoad = NO;
-    _keepParamSlotsOnLoad = NO;
+    _keepSlotsForShape = nil;
+    _adoptedShapePath = p.shapePath;
+    [self forgetTileBudgets];
     _pipelines = p;
     self.shapeParams = p.params ?: @[];
     self.shapeParamsVersion++;
@@ -409,6 +427,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 
 - (BOOL)reloadShadersNow {
     NSString *err = nil;
+    ++_compileGeneration;   // anything still compiling in the background is now out of date
     Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:self.shapePath error:&err];
     _shaderStamp = [self latestShaderModification];
     if (p) {
@@ -419,11 +438,12 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
     return p != nil;
 }
 
+// Compiles in the background and switches over when done.  Each request
+// starts straight away; if another request is made before it finishes, the
+// older result is thrown away when it arrives.
 - (void)reloadShadersInBackground {
-    if (self.compiling) {
-        _reloadPending = YES;
-        return;
-    }
+    const NSUInteger generation = ++_compileGeneration;
+    _compilesInFlight++;
     self.compiling = YES;
     _shaderStamp = [self latestShaderModification];
     id<MTLDevice> device = _device;
@@ -433,17 +453,15 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         NSString *err = nil;
         Pipelines *p = [Renderer buildPipelinesWithDevice:device dir:dir shape:shape error:&err];
         dispatch_async(dispatch_get_main_queue(), ^{
-            self.compiling = NO;
+            self->_compilesInFlight--;
+            self.compiling = (self->_compilesInFlight > 0);
+            if (generation != self->_compileGeneration) return;   // superseded by a newer request
             if (p) {
                 [self adoptPipelines:p];
             } else {
                 self.lastError = err;
             }
             if (self.onShaderResult) self.onShaderResult(p ? nil : err);
-            if (self->_reloadPending) {
-                self->_reloadPending = NO;
-                [self reloadShadersInBackground];
-            }
         });
     });
 }
@@ -521,8 +539,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 
 - (void)selectShape:(NSString *)path keepParamValues:(BOOL)keep {
     if (!path) return;
-    if (keep) _keepParamSlotsOnLoad = YES;
-    else if (![path isEqualToString:self.shapePath]) _resetParamsOnLoad = YES;
+    _keepSlotsForShape = keep ? path : nil;
     self.shapePath = path;
     [[NSUserDefaults standardUserDefaults] setObject:path forKey:kShapeDefaultsKey];
     [self reloadShadersInBackground];
@@ -844,11 +861,14 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 - (NSString *)statusText {
     static NSString *const stageNames[] = {@"Geometry", @"Normals", @"Ambient occlusion", @"Idle"};
     NSMutableString *s = [NSMutableString string];
+    // While a newly picked shape is compiling, the picture still shows the old one; say so first.
+    if (self.compiling && self.shapePath && ![self.shapePath isEqualToString:_adoptedShapePath])
+        [s appendFormat:@"Loading %@…  ·  ", [Renderer displayNameForShape:self.shapePath]];
     [s appendFormat:@"%d × %d  ·  %@", _width, _height, stageNames[_cur->gen]];
     [s appendFormat:@"  ·  geometry %d, ambient %d", self.geomPasses, self.amboPasses];
     if (_cur == &_refl) [s appendString:@"  ·  reflection rays"];
     if (_scene.cb.g_viz_mode != 0) [s appendFormat:@"  ·  view: %@", kVizModeNames[_scene.cb.g_viz_mode]];
-    if (self.compiling) [s appendString:@"  ·  compiling shaders…"];
+    if (self.compiling) [s appendString:@"  ·  compiling…"];
     else if (self.lastError) [s appendString:@"  ·  SHADER ERROR"];
     return s;
 }
@@ -1134,7 +1154,10 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
     if (!pass || !drawable) return;
 
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
-    const int tiles = [self stepInto:cb maxTiles:(int)MAX(1.0, _tilesPerFrame)];
+    // The stage about to be worked on, and its tile budget.
+    const GenMode stage = (_cur->gen == GenNone) ? _cur->next : _cur->gen;
+    const int budget = (stage < GenNone) ? (int)MAX(1.0, _tilesForStage[stage]) : 1;
+    const int tiles = [self stepInto:cb maxTiles:budget];
 
     // Copy the picture to the window.
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
@@ -1153,16 +1176,21 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
 
     // Measure how long the graphics card took, and adjust how many tiles to
     // draw per frame so the app stays responsive whatever the scene costs.
-    if (tiles > 0) {
+    if (tiles > 0 && stage < GenNone) {
         __weak Renderer *weakSelf = self;
+        const NSUInteger generation = _compileGeneration;
         [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+            if (done.status == MTLCommandBufferStatusError)
+                NSLog(@"Gpucaster: the graphics card reported an error: %@", done.error.localizedDescription);
             double seconds = done.GPUEndTime - done.GPUStartTime;
             if (seconds <= 0) return;
             dispatch_async(dispatch_get_main_queue(), ^{
                 Renderer *me = weakSelf;
-                if (!me) return;
-                double ideal = kTargetGpuSeconds / (seconds / tiles);
-                me->_tilesPerFrame = MIN(4096.0, MAX(1.0, 0.5 * me->_tilesPerFrame + 0.5 * ideal));
+                if (!me || generation != me->_compileGeneration) return;   // measured with older shaders
+                double ideal = MIN(4096.0, MAX(1.0, kTargetGpuSeconds / (seconds / tiles)));
+                double &t = me->_tilesForStage[stage];
+                // Drop straight away if a frame took too long; grow gradually.
+                t = (ideal < t) ? ideal : 0.5 * t + 0.5 * ideal;
             });
         }];
     }
