@@ -96,7 +96,9 @@ and an Apple silicon Mac.
 
 Testing aids (environment variables): `GPUCASTER_SHAPE=name` or a full path chooses
 the shape; `GPUCASTER_UISHOT=path` saves a picture of the window's controls after 4
-seconds and quits; `GPUCASTER_UICHECK=1` drives every sidebar slider through its
+seconds and quits; a diagnostic log of mouse presses and slider changes is written
+to `~/Library/Logs/Gpucaster/debug.log` whenever the app runs from the source folder
+(or with `GPUCASTER_LOG` set), replaced at each launch; `GPUCASTER_UICHECK=1` drives every sidebar slider through its
 handler, checks nothing overlaps the visible controls, exercises the colour picker,
 prints a report and quits; `GPUCASTER_EXPORT=path` with optional `GPUCASTER_EXPORT_SCALE=n`
 runs a large export through the app and quits. Screen capture is not permitted for
@@ -157,15 +159,18 @@ the assistant on this Mac, which is why the layout snapshot exists.
   confirmed shape switching works afterwards.
 
 - Lights controls (reported by the user, 2026-11-12): the colour picker's sliders
-  did not work, and the per-light Brightness and Wrap sliders did not work. Found
-  and fixed: the light's colour well ignored the brightness chosen in the picker and
+  did not work, and the per-light Brightness and Wrap sliders did not work.
+  Fixed: the light's colour well ignored the brightness chosen in the picker and
   wrote a changed colour back into the well while the picker was open, so the picker
   fought the app. The picker now sets the light's colour exactly, and the app never
-  echoes colours back. NOT explained: why Brightness and Wrap failed. Driven through
-  the same handler a drag uses they work for every light, with and without the
-  picker open, and nothing overlaps them. A simulated mouse could not be made to
-  work on this Mac, so real drags are untested. Waiting on the user to say whether
-  they work now and, if not, what exactly happens.
+  echoes colours back.
+  Brightness and Wrap: cause never identified. The user reported them still failing
+  on the build with the picker fix, but in two later sessions with the diagnostic log
+  on (the only change), every drag on every light worked, before and after Solo, the
+  random buttons, the ball and the picker, and the user confirmed it all worked.
+  Treat as unexplained, possibly intermittent. The diagnostic log stays on in the
+  development build so a recurrence is captured: ask the user to leave the app open
+  and read `~/Library/Logs/Gpucaster/debug.log`.
 
 ## Known gaps
 
