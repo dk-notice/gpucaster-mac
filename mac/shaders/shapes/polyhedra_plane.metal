@@ -1,5 +1,7 @@
 // An infinite plane of dodecahedra and icosahedra.
 //
+// param: size = 0.2 (0.05 to 0.45)
+//
 // See eval_common.metal for what a shape file can use.
 
 EvalResult Eval(float3 ws) {
@@ -8,7 +10,6 @@ EvalResult Eval(float3 ws) {
     ret.surface_color = float3(1, 1, 1);
     ret.reflectivity = 1;
 
-    float  size = 0.2;
     float3 icosa_center = float3(0.25, -0.5, 0.25);
     float3 dodec_center = float3(-0.25, -0.5, -0.25);
     icosa_center.xz += floor(ws.xz) + 0.5;

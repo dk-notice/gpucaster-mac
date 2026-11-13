@@ -1,5 +1,9 @@
 // Eight soft blobs that merge where they meet, above a flat floor.
 //
+// param: blob_size = 0.4 (0.1 to 1.0)
+// param: spread = 0.4 (0.1 to 1.0)
+// param: floor_height = -0.2 (-1.0 to 0.5)
+//
 // See eval_common.metal for what a shape file can use.
 
 EvalResult Eval(float3 ws) {
@@ -10,8 +14,8 @@ EvalResult Eval(float3 ws) {
 
     ret.density = 0;
     for (int i = 0; i < 8; i++) {
-        float3 blob_pos = seed_snorm[i].xyz * 0.4;
-        float blob_field_rad = 0.4 + seed_unorm[i].w * 0.2;
+        float3 blob_pos = seed_snorm[i].xyz * spread;
+        float blob_field_rad = blob_size + seed_unorm[i].w * 0.2;
         float t = length(ws - blob_pos) / blob_field_rad;
         // Pick one of the following:
         // (1) Cheap polynomial blobs:
@@ -20,8 +24,8 @@ EvalResult Eval(float3 ws) {
         ret.density += 0.1 / (t * t + 0.01) - 0.25;
     }
 
-    // Force everything below y == -0.2 to solid earth.
-    if (ws.y < -0.2) ret.density = 1;
+    // Force everything below the floor height to solid earth.
+    if (ws.y < floor_height) ret.density = 1;
 
     return ret;
 }

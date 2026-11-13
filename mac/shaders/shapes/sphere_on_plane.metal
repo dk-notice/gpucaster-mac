@@ -1,5 +1,7 @@
 // A simple sphere at the origin, sitting on a plane.  A good starting point.
 //
+// param: radius = 0.3 (0.05 to 1.0)
+//
 // See eval_common.metal for what a shape file can use.
 
 EvalResult Eval(float3 ws) {
@@ -8,7 +10,7 @@ EvalResult Eval(float3 ws) {
     ret.surface_color = float3(1, 1, 1);
     ret.reflectivity = 1;
 
-    float sphere_radius = 0.3;
+    float sphere_radius = radius;
     float sphere = sphere_radius - length(ws);
     float plane  = -sphere_radius - ws.y;
     ret.density = max(sphere, plane);

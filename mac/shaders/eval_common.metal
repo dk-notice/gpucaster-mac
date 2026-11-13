@@ -22,7 +22,16 @@
 // random scene): seed_snorm[i] (-1..1), seed_unorm[i] (0..1), seed_dir[i]
 // (unit vectors), each with .x .y .z .w, for i in 0..63.
 //
-// Tunable values: g_c0 .. g_c9, each with .x .y .z .w.
+// Adjustable values.  A comment line like this near the top of a shape file:
+//
+//     // param: twist = 0.3 (0.0 to 1.0)
+//
+// makes a "Twist" slider in the sidebar, running from 0 to 1 and starting at
+// 0.3, and lets the code use 'twist' as a number.  Moving the slider redraws
+// the picture without recompiling.  If all three numbers are written without
+// a decimal point, as in "iterations = 8 (2 to 16)", the slider moves in whole
+// numbers; use int(iterations) where a whole number is needed, such as a loop
+// count.  Up to 40 per shape.  Their values are saved in scene files.
 //
 // Also available: ws_eye_pos (where the camera is) and
 // g_ws_pixel_size_at_depth_1 (multiply by the distance from the camera to get

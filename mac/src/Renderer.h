@@ -18,6 +18,17 @@ typedef NS_ENUM(int, GenMode) {
     GenNone = 3,
 };
 
+// A value a shape file declares as adjustable, with a line like
+//     // param: twist = 0.3 (0 to 1)
+// The app shows it as a slider, and the shape code uses the name as a number.
+@interface ShapeParam : NSObject
+@property (nonatomic, copy) NSString *name;        // as written in the file, e.g. "fold_radius"
+@property (nonatomic, readonly) NSString *label;   // for display, e.g. "Fold radius"
+@property (nonatomic) float defaultValue, minValue, maxValue;
+@property (nonatomic) BOOL integer;                // whole numbers only
+@property (nonatomic) int slot;                    // where its value is stored (0..39)
+@end
+
 static const int kNumVizModes = 7;
 extern NSString *const kVizModeNames[kNumVizModes];
 
@@ -62,6 +73,13 @@ extern NSString *const kVizModeNames[kNumVizModes];
 @property (nonatomic, readonly) NSString *shapesDir;
 - (NSArray<NSString *> *)availableShapes;                      // full paths, sorted by name
 - (void)selectShape:(NSString *)path;                          // compiles it, then starts again
+- (void)selectShape:(NSString *)path keepParamValues:(BOOL)keep;   // keep = values came from a scene file
+// The adjustable values the current shape declares.
+@property (nonatomic, readonly) NSArray<ShapeParam *> *shapeParams;
+@property (nonatomic, readonly) NSInteger shapeParamsVersion;      // changes whenever the list does
+- (float)valueOfParam:(ShapeParam *)param;
+- (void)setValue:(float)value ofParam:(ShapeParam *)param;         // then starts the picture again
+- (void)resetShapeParams;
 + (NSString *)displayNameForShape:(NSString *)path;            // "fractal_dodecahedron.metal" -> "Fractal dodecahedron"
 // Compiles a shape without using it.  Returns nil if it is fine, else the error.
 - (NSString *)compileErrorForShape:(NSString *)path;

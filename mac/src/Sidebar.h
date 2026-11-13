@@ -12,6 +12,10 @@
 // the lighting (random lighting, opening a scene, dragging a light).
 - (void)refresh;
 
+// Rebuilds the Shape section if the shape or its adjustable values changed.
+// Cheap to call often.
+- (void)syncShapeParams;
+
 // Called just before a control changes the scene, so the app can record an
 // undo step.  'name' identifies the control (nil for one-off actions), so that
 // one drag of a slider becomes one step.

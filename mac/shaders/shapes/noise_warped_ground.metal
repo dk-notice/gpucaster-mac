@@ -1,5 +1,10 @@
 // A ground plane warped twice by fractal noise.
-// Driven by the tunable values g_c0 and g_c1 (not yet editable in the app; they default to 1).
+//
+// param: wavelength_1 = 1.0 (0.1 to 4.0)
+// param: strength_1 = 1.0 (0.0 to 4.0)
+// param: wavelength_2 = 1.0 (0.1 to 4.0)
+// param: strength_2 = 1.0 (0.0 to 4.0)
+// param: detail = 1.0 (0.5 to 8.0)
 //
 // See eval_common.metal for what a shape file can use.
 
@@ -17,27 +22,25 @@ EvalResult Eval(float3 ws) {
 
     float str = 0.1;
 
-    // Double pre-warp, ** driven by values you can adjust from the app (g_c0, g_c1). **
-
     // Pre-warp 'ws'.
     float3 delta = OctaveNoise(
         NOISE_HQ,                   // NOISE_SNAP, NOISE_REG, or NOISE_HQ.
         ws,                         // *real* world-space pos (...otherwise nyquist gets botched)
-        g_c1.x,                     // wavelen (ws size of 1 texel)
+        wavelength_1,               // wavelen (ws size of 1 texel)
         ws_pixel_size,              // the ws size of a pixel (at this depth)
-        g_c0.z,                     // the min feature size to loop until, in pixels.
+        detail,                     // the min feature size to loop until, in pixels.
         false,                      // bSmoothBasedOnLowerFreqs
         false,                      // bCreased
         noiseIndex++,               // put 'noiseIndex++' here.
         MAX_OCTAVES                 // max # of octaves.
     ).xyz;
-    ws += delta * str * g_c1.y;
+    ws += delta * str * strength_1;
 
     // Do it again.
     delta = OctaveNoise(
         NOISE_HQ,                   // NOISE_SNAP, NOISE_REG, or NOISE_HQ.
         ws,                         // *real* world-space pos (...otherwise nyquist gets botched)
-        g_c1.z,                     // wavelen (ws size of 1 texel)
+        wavelength_2,               // wavelen (ws size of 1 texel)
         ws_pixel_size,              // the ws size of a pixel (at this depth)
         1,                          // the min feature size to loop until, in pixels.
         false,                      // bSmoothBasedOnLowerFreqs
@@ -45,7 +48,7 @@ EvalResult Eval(float3 ws) {
         noiseIndex++,               // put 'noiseIndex++' here.
         MAX_OCTAVES                 // max # of octaves.
     ).xyz;
-    ws += delta * str * g_c1.w;
+    ws += delta * str * strength_2;
 
     // ...plus a simple ground plane, to show it.
     ret.density = -0.5 - ws.y;

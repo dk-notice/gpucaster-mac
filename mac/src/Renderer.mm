@@ -19,9 +19,17 @@ static const int kTileStride = 1280;          // bytes between tiles in the per-
 
 static const uint32_t CLEAR_GEOM = 1, CLEAR_NORM = 2, CLEAR_AMBO = 4, CLEAR_ALL = 0xFFFFFFFF;
 
-// Compiled shaders for each stage.
+@implementation ShapeParam
+- (NSString *)label {
+    NSString *s = [self.name stringByReplacingOccurrencesOfString:@"_" withString:@" "];
+    return s.length ? [[[s substringToIndex:1] uppercaseString] stringByAppendingString:[s substringFromIndex:1]] : s;
+}
+@end
+
+// Compiled shaders for each stage, and what the shape file declared.
 @interface Pipelines : NSObject
 @property (nonatomic, strong) id<MTLRenderPipelineState> geom, norm, ambo, relight, display;
+@property (nonatomic, strong) NSArray<ShapeParam *> *params;
 @end
 @implementation Pipelines
 @end
@@ -48,6 +56,8 @@ struct IntersectionSet {
 @interface Renderer ()
 @property (nonatomic, readwrite) NSString *shaderDir;
 @property (nonatomic, readwrite) NSString *shapePath;
+@property (nonatomic, readwrite) NSArray<ShapeParam *> *shapeParams;
+@property (nonatomic, readwrite) NSInteger shapeParamsVersion;
 @property (nonatomic, readwrite) NSString *lastError;
 @property (nonatomic, readwrite) BOOL compiling;
 @end
@@ -75,6 +85,8 @@ struct IntersectionSet {
     BOOL _autoFinishedMain;        // the automatic run completed the primary rays
     int _amboTarget;               // ambient passes to reach for the primary rays (grows with "refine more")
     BOOL _reloadPending;
+    BOOL _resetParamsOnLoad;       // the user picked a different shape: start from its defaults
+    BOOL _keepParamSlotsOnLoad;    // values were just loaded from a scene file: leave them alone
     double _tilesPerFrame;
     NSTimeInterval _shaderStamp;
     std::mt19937 _timeRng;
@@ -131,10 +143,20 @@ struct IntersectionSet {
 + (NSString *)expandFile:(NSString *)name
                      dir:(NSString *)dir
                    shape:(NSString *)shapePath
+                  params:(NSArray<ShapeParam *> *)params
                     seen:(NSMutableSet *)seen
                    error:(NSString **)error {
     NSString *path = [dir stringByAppendingPathComponent:name];
+    NSMutableString *before = [NSMutableString string], *after = [NSMutableString string];
     if ([name isEqualToString:kShapeInclude]) {
+        // Each declared parameter becomes a name the shape code can use as a
+        // number.  The names are removed again after the shape, so they can't
+        // clash with the rest of the shader code.
+        static const char comp[4] = {'x', 'y', 'z', 'w'};
+        for (ShapeParam *p in params) {
+            [before appendFormat:@"#define %@ (g_dialog_coeffs[%d].%c)\n", p.name, p.slot / 4, comp[p.slot % 4]];
+            [after appendFormat:@"#undef %@\n", p.name];
+        }
         if (!shapePath) {
             if (error) *error = @"No shape file is selected.";
             return nil;
@@ -148,7 +170,7 @@ struct IntersectionSet {
         if (error) *error = [NSString stringWithFormat:@"Could not read %@:\n%@", path, err.localizedDescription];
         return nil;
     }
-    NSMutableString *out = [NSMutableString stringWithFormat:@"#line 1 \"%@\"\n", name];
+    NSMutableString *out = [NSMutableString stringWithFormat:@"%@#line 1 \"%@\"\n", before, name];
     NSArray<NSString *> *lines = [text componentsSeparatedByString:@"\n"];
     for (NSUInteger i = 0; i < lines.count; i++) {
         NSString *line = lines[i];
@@ -161,7 +183,7 @@ struct IntersectionSet {
                 NSString *inc = [rest substringToIndex:close.location];
                 if (![seen containsObject:inc]) {
                     [seen addObject:inc];
-                    NSString *body = [self expandFile:inc dir:dir shape:shapePath seen:seen error:error];
+                    NSString *body = [self expandFile:inc dir:dir shape:shapePath params:params seen:seen error:error];
                     if (!body) return nil;
                     [out appendString:body];
                     [out appendFormat:@"\n#line %lu \"%@\"\n", (unsigned long)(i + 2), name];
@@ -174,7 +196,39 @@ struct IntersectionSet {
         [out appendString:line];
         [out appendString:@"\n"];
     }
+    [out appendString:after];
     return out;
+}
+
+// Finds the "// param: name = default (min to max)" lines in a shape file.
++ (NSArray<ShapeParam *> *)paramsInShape:(NSString *)shapePath {
+    NSMutableArray<ShapeParam *> *params = [NSMutableArray array];
+    NSString *text = shapePath ? [NSString stringWithContentsOfFile:shapePath encoding:NSUTF8StringEncoding error:nil] : nil;
+    if (!text) return params;
+    NSString *num = @"(-?[0-9]*\\.?[0-9]+)";
+    NSString *pattern = [NSString stringWithFormat:
+        @"^\\s*//\\s*param:\\s*([A-Za-z_][A-Za-z0-9_]*)\\s*=\\s*%@\\s*\\(\\s*%@\\s*to\\s*%@\\s*\\)", num, num, num];
+    NSRegularExpression *re = [NSRegularExpression regularExpressionWithPattern:pattern
+                                                                        options:NSRegularExpressionAnchorsMatchLines
+                                                                          error:nil];
+    NSMutableSet *names = [NSMutableSet set];
+    for (NSTextCheckingResult *m in [re matchesInString:text options:0 range:NSMakeRange(0, text.length)]) {
+        if (params.count >= MAX_VECTOR_COEFFS * 4) break;
+        ShapeParam *p = [ShapeParam new];
+        p.name = [text substringWithRange:[m rangeAtIndex:1]];
+        if ([names containsObject:p.name]) continue;
+        [names addObject:p.name];
+        NSString *d = [text substringWithRange:[m rangeAtIndex:2]];
+        NSString *lo = [text substringWithRange:[m rangeAtIndex:3]];
+        NSString *hi = [text substringWithRange:[m rangeAtIndex:4]];
+        p.defaultValue = d.floatValue;
+        p.minValue = MIN(lo.floatValue, hi.floatValue);
+        p.maxValue = MAX(lo.floatValue, hi.floatValue);
+        p.integer = ![d containsString:@"."] && ![lo containsString:@"."] && ![hi containsString:@"."];
+        p.slot = (int)params.count;
+        [params addObject:p];
+    }
+    return params;
 }
 
 + (Pipelines *)buildPipelinesWithDevice:(id<MTLDevice>)device
@@ -185,7 +239,8 @@ struct IntersectionSet {
         if (error) *error = @"Could not find the shaders folder.";
         return nil;
     }
-    NSString *src = [self expandFile:kMasterShader dir:dir shape:shapePath seen:[NSMutableSet set] error:error];
+    NSArray<ShapeParam *> *params = [self paramsInShape:shapePath];
+    NSString *src = [self expandFile:kMasterShader dir:dir shape:shapePath params:params seen:[NSMutableSet set] error:error];
     if (!src) return nil;
 
     MTLCompileOptions *opts = [MTLCompileOptions new];
@@ -241,7 +296,55 @@ struct IntersectionSet {
     p.ambo = states[2];
     p.relight = states[3];
     p.display = states[4];
+    p.params = params;
     return p;
+}
+
+// Starts using freshly compiled shaders, and sets up the shape's adjustable values.
+- (void)adoptPipelines:(Pipelines *)p {
+    // Work out every value first, then store them, so that parameters whose
+    // storage slots have moved don't trample each other.
+    NSArray<ShapeParam *> *old = self.shapeParams;
+    NSMutableArray<NSNumber *> *values = [NSMutableArray array];
+    for (ShapeParam *param in p.params) {
+        float value = param.defaultValue;
+        if (_keepParamSlotsOnLoad) {
+            value = [self valueOfParam:param];               // came from a scene file: leave it alone
+        } else if (!_resetParamsOnLoad) {
+            // The same file was edited and saved: keep each value that still exists, by name.
+            for (ShapeParam *o in old) {
+                if ([o.name isEqualToString:param.name]) value = [self valueOfParam:o];
+            }
+            value = MIN(MAX(value, param.minValue), param.maxValue);
+        }
+        [values addObject:@(value)];
+    }
+    for (NSUInteger i = 0; i < p.params.count; i++) [self storeValue:values[i].floatValue ofParam:p.params[i]];
+    _resetParamsOnLoad = NO;
+    _keepParamSlotsOnLoad = NO;
+    _pipelines = p;
+    self.shapeParams = p.params ?: @[];
+    self.shapeParamsVersion++;
+    self.lastError = nil;
+    [self clearAll];
+}
+
+- (float)valueOfParam:(ShapeParam *)param {
+    return _scene.cb.g_dialog_coeffs[param.slot / 4][param.slot % 4];
+}
+
+- (void)storeValue:(float)value ofParam:(ShapeParam *)param {
+    _scene.cb.g_dialog_coeffs[param.slot / 4][param.slot % 4] = value;
+}
+
+- (void)setValue:(float)value ofParam:(ShapeParam *)param {
+    [self storeValue:value ofParam:param];
+    [self clearAll];
+}
+
+- (void)resetShapeParams {
+    for (ShapeParam *param in self.shapeParams) [self storeValue:param.defaultValue ofParam:param];
+    [self clearAll];
 }
 
 - (BOOL)reloadShadersNow {
@@ -249,9 +352,7 @@ struct IntersectionSet {
     Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:self.shapePath error:&err];
     _shaderStamp = [self latestShaderModification];
     if (p) {
-        _pipelines = p;
-        self.lastError = nil;
-        [self clearAll];
+        [self adoptPipelines:p];
     } else {
         self.lastError = err;
     }
@@ -274,9 +375,7 @@ struct IntersectionSet {
         dispatch_async(dispatch_get_main_queue(), ^{
             self.compiling = NO;
             if (p) {
-                self->_pipelines = p;
-                self.lastError = nil;
-                [self clearAll];
+                [self adoptPipelines:p];
             } else {
                 self.lastError = err;
             }
@@ -358,8 +457,12 @@ struct IntersectionSet {
     return [self availableShapes].firstObject;
 }
 
-- (void)selectShape:(NSString *)path {
+- (void)selectShape:(NSString *)path { [self selectShape:path keepParamValues:NO]; }
+
+- (void)selectShape:(NSString *)path keepParamValues:(BOOL)keep {
     if (!path) return;
+    if (keep) _keepParamSlotsOnLoad = YES;
+    else if (![path isEqualToString:self.shapePath]) _resetParamsOnLoad = YES;
     self.shapePath = path;
     [[NSUserDefaults standardUserDefaults] setObject:path forKey:kShapeDefaultsKey];
     [self reloadShadersInBackground];

@@ -227,6 +227,7 @@
 - (void)tick {
     [_renderer reloadShadersIfFilesChanged];
     [self refreshShapePopup];
+    [_sidebar syncShapeParams];
     _status.stringValue = [_renderer statusText];
 
     // One button: pause while working, resume when paused, refine when finished.
@@ -604,7 +605,7 @@ static const NSInteger kShapeItemTag = 1000;
             [self->_renderer sceneReplaced];
             // A scene saved by this app has its shape beside it, as "<name>.metal".
             NSString *shape = [[panel.URL.path stringByDeletingPathExtension] stringByAppendingPathExtension:@"metal"];
-            if ([[NSFileManager defaultManager] fileExistsAtPath:shape]) [self->_renderer selectShape:shape];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:shape]) [self->_renderer selectShape:shape keepParamValues:YES];
         }
         [self->_sidebar refresh];
         [self tick];
@@ -739,6 +740,31 @@ static int RunSelfTest(NSString *outDir) {
         [b refineMore];
         [b runUntilFinished:50];
         if (b.amboPasses != 8) { fprintf(stderr, "selftest: refine more gave %d ambient passes, expected 8\n", b.amboPasses); failures++; }
+    }
+
+    // Shape parameters: the Mandelbox declares five, they start at their
+    // defaults, and changing one changes the picture.
+    {
+        setenv("GPUCASTER_SHAPE", "mandelbox", 1);
+        Renderer *m = [[Renderer alloc] initWithDevice:device];
+        setenv("GPUCASTER_SHAPE", "blobs", 1);
+        m.autoEnabled = NO;
+        [m setImageWidth:320 height:200];
+        ShapeParam *scale = nil;
+        for (ShapeParam *sp in m.shapeParams) if ([sp.name isEqualToString:@"scale"]) scale = sp;
+        float depthA = 0, depthB = 0; simd_float4 n, am;
+        if (m.shapeParams.count != 5 || !scale || [m valueOfParam:scale] != 2.0f) {
+            fprintf(stderr, "selftest: Mandelbox parameters not read correctly (%d found)\n", (int)m.shapeParams.count);
+            failures++;
+        } else {
+            [m runPasses:20];
+            [m readPixelX:160 y:100 depth:&depthA normal:&n ambo:&am];
+            [m setValue:-1.5f ofParam:scale];
+            [m runPasses:20];
+            [m readPixelX:160 y:100 depth:&depthB normal:&n ambo:&am];
+            printf("selftest: Mandelbox centre depth %.4f at scale 2, %.4f at scale -1.5\n", depthA, depthB);
+            if (depthA == depthB) { fprintf(stderr, "selftest: changing a shape parameter did not change the picture\n"); failures++; }
+        }
     }
 
     // Every shape in the shapes folder must compile.

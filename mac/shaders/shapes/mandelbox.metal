@@ -1,5 +1,11 @@
 // The standard Mandelbox fractal.
 //
+// param: zoom = 20.0 (5.0 to 60.0)
+// param: scale = 2.0 (-3.0 to 3.0)
+// param: fold_radius = 0.5 (0.1 to 1.0)
+// param: iterations = 8 (2 to 16)
+// param: fullness = 4.0 (1.0 to 8.0)
+//
 // See eval_common.metal for what a shape file can use.
 
 EvalResult Eval(float3 ws) {
@@ -8,11 +14,10 @@ EvalResult Eval(float3 ws) {
     ret.surface_color = float3(1, 1, 1);
     ret.reflectivity = 1;
 
-    const float3 c = ws * 20;
-    const float scale = 2;     // TRY: -1.5, 1.5, 2
-    const float r = 0.5f;
+    const float3 c = ws * zoom;
+    const float r = fold_radius;
     const float f = 1;
-    const int its = 8;
+    const int its = int(iterations);
     float3 v = float3(0);    // c or 0?
 
     ret.density = -1;
@@ -49,7 +54,7 @@ EvalResult Eval(float3 ws) {
 
     float max_dim = max(abs(v.x), max(abs(v.y), abs(v.z)));
 
-    ret.density = (max_dim > 4) ? -1 : 1;      // thresh determines the fullness of the volume.
+    ret.density = (max_dim > fullness) ? -1 : 1;      // thresh determines the fullness of the volume.
     ret.reflectivity = 1;
 
     return ret;

@@ -2,6 +2,7 @@
 
 static const CGFloat kSidebarWidth = 300;
 static const CGFloat kSideMargin = 12;
+static const NSInteger kShapeTagBase = 10000;
 static const int kNumEditableLights = 5;   // the shaders light the scene with the first five
 
 // A view whose origin is at the top-left, so scrolled content starts at the top.
@@ -48,6 +49,9 @@ typedef NS_ENUM(int, ChangeKind) {
     NSStackView *_target;         // where the building-block methods add rows
     NSMutableArray<SliderEntry *> *_entries;        // indexed by slider tag
     NSStackView *_advanced;       // rarely needed controls, hidden until asked for
+    NSStackView *_shapeSection;   // sliders for the values the current shape declares
+    NSMutableArray<SliderEntry *> *_shapeEntries;   // indexed by slider tag - kShapeTagBase
+    NSInteger _shapeParamsSeen;   // which version of the renderer's list is on screen
     NSPopUpButton *_vizPopup;
     NSPopUpButton *_mousePopup;
     NSPopUpButton *_lightPopup;
@@ -61,6 +65,8 @@ typedef NS_ENUM(int, ChangeKind) {
     if ((self = [super initWithFrame:NSMakeRect(0, 0, kSidebarWidth, 600)])) {
         _renderer = renderer;
         _entries = [NSMutableArray array];
+        _shapeEntries = [NSMutableArray array];
+        _shapeParamsSeen = -1;
         [self build];
         [self refresh];
     }
@@ -145,7 +151,8 @@ typedef NS_ENUM(int, ChangeKind) {
 }
 
 - (void)sliderMoved:(NSSlider *)slider {
-    SliderEntry *e = _entries[(NSUInteger)slider.tag];
+    SliderEntry *e = (slider.tag >= kShapeTagBase) ? _shapeEntries[(NSUInteger)(slider.tag - kShapeTagBase)]
+                                                   : _entries[(NSUInteger)slider.tag];
     [self noteChange:e.name];
     float v = e.integer ? roundf(slider.floatValue) : slider.floatValue;
     e.set(v);
@@ -254,6 +261,11 @@ static void ColorInto(NSColor *color, f4 *out) {
     #define SCENE_VALUE(expr) \
         get:^float { return weakSelf.scene->expr; } set:^(float v) { weakSelf.scene->expr = v; }
 
+    // ---- Shape (filled in by -syncShapeParams) ----
+    _shapeSection = [self verticalStack];
+    [self addRow:_shapeSection];
+    _shapeSection.hidden = YES;
+
     // ---- View ----
     [self addSection:@"View"];
     NSMutableArray *vizNames = [NSMutableArray array];
@@ -345,6 +357,46 @@ static void ColorInto(NSColor *color, f4 *out) {
     #undef SCENE_VALUE
 }
 
+// Rebuilds the Shape section when the shape, or its list of adjustable values, changes.
+- (void)syncShapeParams {
+    if (_shapeParamsSeen == _renderer.shapeParamsVersion) return;
+    _shapeParamsSeen = _renderer.shapeParamsVersion;
+
+    for (NSView *v in [_shapeSection.arrangedSubviews copy]) {
+        [_shapeSection removeArrangedSubview:v];
+        [v removeFromSuperview];
+    }
+    [_shapeEntries removeAllObjects];
+
+    NSArray<ShapeParam *> *params = _renderer.shapeParams;
+    _shapeSection.hidden = (params.count == 0);
+    if (params.count == 0) return;
+
+    __weak Renderer *renderer = _renderer;
+    _target = _shapeSection;
+    [_shapeSection addArrangedSubview:[self label:[Renderer displayNameForShape:_renderer.shapePath] bold:YES]];
+    for (ShapeParam *param in params) {
+        SliderEntry *e = [self addSlider:param.label min:param.minValue max:param.maxValue kind:ChangeNothing
+                                     get:^float { return [renderer valueOfParam:param]; }
+                                     set:^(float v) { [renderer setValue:v ofParam:param]; }];
+        e.integer = param.integer;
+        // (Shape sliders are kept in their own list, because they come and go.)
+        [_entries removeLastObject];
+        e.slider.tag = kShapeTagBase + (NSInteger)_shapeEntries.count;
+        [_shapeEntries addObject:e];
+        [e refresh];
+    }
+    [self addButtons:@[[self button:@"Reset to defaults" action:@selector(resetShapeParams:)]]];
+    [_stack setCustomSpacing:16 afterView:_shapeSection];
+    _target = _stack;
+}
+
+- (void)resetShapeParams:(id)sender {
+    [self noteChange:nil];
+    [_renderer resetShapeParams];
+    [self refresh];
+}
+
 - (void)toggleAdvanced:(NSButton *)b {
     _advanced.hidden = (b.state != NSControlStateValueOn);
 }
@@ -353,7 +405,9 @@ static void ColorInto(NSColor *color, f4 *out) {
 
 - (void)refresh {
     SceneState *s = self.scene;
+    [self syncShapeParams];
     for (SliderEntry *e in _entries) [e refresh];
+    for (SliderEntry *e in _shapeEntries) [e refresh];
     [_vizPopup selectItemAtIndex:(NSInteger)s->cb.g_viz_mode];
     [_lightPopup selectItemAtIndex:_selectedLight];
     int target = _renderer.mouseTarget;
