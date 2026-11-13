@@ -13,10 +13,14 @@ Last updated: 2026-11-12
 - Auto mode (on by default) runs 40 geometry passes, normals, then 16 ambient passes
   and stops. Moving the camera restarts it.
 - Shaders are text files in `mac/shaders/`. Saving one reloads it automatically;
-  compile errors show in a sheet with the file and line. `eval.metal` is the file to
-  edit for new worlds; `#define SCENE n` at its top picks the example.
+  compile errors show in a sheet with the file and line.
+- Shapes: each world is one `.metal` file in `mac/shaders/shapes/` holding an `Eval()`
+  function. A toolbar pop-up and a Shape menu list the folder; Open Shape File loads
+  one from anywhere; New Shape copies the current one and opens it in a text editor.
+  The last shape used is remembered between launches.
 - Scene files (`.scn`) load and save in the Windows version's format (version 5).
-- Save Image writes a PNG plus the scene file and a copy of `eval.metal` beside it.
+- Save Scene and Save Image also write a copy of the shape beside the file as
+  `name.metal`; Open Scene loads a same-named `.metal` beside the `.scn` if present.
 
 ## Verified automatically
 
@@ -24,14 +28,17 @@ Last updated: 2026-11-12
   counts, that a surface, unit-length normal and plausible ambient value exist at the
   centre pixel, and that a scene file survives save and reload. Pictures land in
   `mac/build/selftest/`.
-- All ten example scenes compile and render (checked by eye for 4, 7 and 10).
+- `make test` also compiles every file in the shapes folder.
+- All ten shapes render when selected (`GPUCASTER_SHAPE=name`), as does a shape file
+  outside the folder; a broken shape reports its own file name and line.
 - Shader error messages name the right file and line.
 - Window layout (toolbar and sidebar), from the app's own layout snapshot.
 
 ## Not yet verified (needs a person at the window)
 
 - Mouse camera control, scroll/pinch zoom, dragging lights.
-- Menu commands and single-key shortcuts, toolbar buttons, sidebar controls live.
+- Shape pop-up and Shape menu (Open Shape File, New Shape, Edit, Show in Finder).
+- Shape copy on Save Scene / Save Image, and shape pickup on Open Scene.
 - Open/Save Scene and Save Image panels.
 - Reflection pass in the live app (shader path compiles; not exercised by the test).
 - Whether output matches the Windows version: no reference captures yet.
@@ -46,7 +53,7 @@ From the `mac/` folder:
 Only Apple's Command Line Tools are needed (no Xcode). Requires macOS 15 or later
 and an Apple silicon Mac.
 
-Testing aids: `GPUCASTER_SCENE=n` overrides the example scene; `GPUCASTER_UISHOT=path`
+Testing aids: `GPUCASTER_SHAPE=name` (or a full path) overrides the shape; `GPUCASTER_UISHOT=path`
 saves a picture of the window's controls after 4 seconds and quits (screen capture is
 not permitted for the assistant on this Mac, so this is how layout gets checked).
 
@@ -57,8 +64,11 @@ not permitted for the assistant on this Mac, so this is how layout gets checked)
 - Get the app working first; matching the original's render quality comes later.
 - Native Metal + AppKit app in `mac/`, written in Objective-C++. Original files are
   left untouched.
+- "Shape" means the `Eval()` geometry file (`.metal`); "scene" means seed, camera and
+  lighting (`.scn`). The two-file pairing was chosen over a single Mac-only bundle so
+  that old Windows scenes still open (user, 2026-11-12).
 - Shader code lives inside a `Scene` struct (Metal has no global variables), with
-  macros in `compat.metal` so `eval.metal` reads almost like the original.
+  macros in `compat.metal` so shape files read almost like the original.
 - Risky floating-point optimisations are off (Metal "safe" math mode).
 - The app chooses how many 128-pixel tiles to draw per frame from measured GPU time;
   there are no tile-size launchers.
@@ -74,7 +84,8 @@ not permitted for the assistant on this Mac, so this is how layout gets checked)
 ## Known gaps
 
 - No undo yet (L still randomises lighting with no way back; save the scene first).
-- No editor for the tunable values `g_c0`..`g_c9` (they default to 1; scene 9 uses them).
+- No editor for the tunable values `g_c0`..`g_c9` (they default to 1; the
+  noise-warped-ground shape uses them).
 - No high-resolution export: the picture is the size of the window in pixels.
 - No mouse zoom lens (the original's Z key).
 - No app icon; not packaged for distribution.

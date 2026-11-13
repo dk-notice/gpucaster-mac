@@ -10,6 +10,9 @@ NSString *const kVizModeNames[kNumVizModes] = {
 };
 
 static NSString *const kMasterShader = @"gpucaster.metal";
+static NSString *const kShapeInclude = @"@shape";     // stands for the chosen shape file
+static NSString *const kDefaultShape = @"blobs.metal";
+static NSString *const kShapeDefaultsKey = @"ShapePath";
 static const int kTileEdge = 128;             // pixels; the app decides how many tiles to draw per frame
 static const double kTargetGpuSeconds = 0.010;   // GPU time to spend per frame, to keep the app responsive
 static const int kTileStride = 1280;          // bytes between tiles in the per-tile buffer (>= sizeof(TileUniforms))
@@ -46,6 +49,7 @@ struct IntersectionSet {
 
 @interface Renderer ()
 @property (nonatomic, readwrite) NSString *shaderDir;
+@property (nonatomic, readwrite) NSString *shapePath;
 @property (nonatomic, readwrite) NSString *lastError;
 @property (nonatomic, readwrite) BOOL compiling;
 @end
@@ -85,6 +89,7 @@ struct IntersectionSet {
         _autoActive = YES;
         _tilesPerFrame = 4;
         _shaderDir = [Renderer findShaderDir];
+        _shapePath = [self initialShape];
         _shaderStamp = [self latestShaderModification];
 
         [self makeSamplers];
@@ -121,9 +126,18 @@ struct IntersectionSet {
 // pointing at the right file and line.
 + (NSString *)expandFile:(NSString *)name
                      dir:(NSString *)dir
+                   shape:(NSString *)shapePath
                     seen:(NSMutableSet *)seen
                    error:(NSString **)error {
     NSString *path = [dir stringByAppendingPathComponent:name];
+    if ([name isEqualToString:kShapeInclude]) {
+        if (!shapePath) {
+            if (error) *error = @"No shape file is selected.";
+            return nil;
+        }
+        path = shapePath;
+        name = shapePath.lastPathComponent;
+    }
     NSError *err = nil;
     NSString *text = [NSString stringWithContentsOfFile:path encoding:NSUTF8StringEncoding error:&err];
     if (!text) {
@@ -143,7 +157,7 @@ struct IntersectionSet {
                 NSString *inc = [rest substringToIndex:close.location];
                 if (![seen containsObject:inc]) {
                     [seen addObject:inc];
-                    NSString *body = [self expandFile:inc dir:dir seen:seen error:error];
+                    NSString *body = [self expandFile:inc dir:dir shape:shapePath seen:seen error:error];
                     if (!body) return nil;
                     [out appendString:body];
                     [out appendFormat:@"\n#line %lu \"%@\"\n", (unsigned long)(i + 2), name];
@@ -159,21 +173,21 @@ struct IntersectionSet {
     return out;
 }
 
-+ (Pipelines *)buildPipelinesWithDevice:(id<MTLDevice>)device dir:(NSString *)dir error:(NSString **)error {
++ (Pipelines *)buildPipelinesWithDevice:(id<MTLDevice>)device
+                                    dir:(NSString *)dir
+                                  shape:(NSString *)shapePath
+                                  error:(NSString **)error {
     if (!dir) {
         if (error) *error = @"Could not find the shaders folder.";
         return nil;
     }
-    NSString *src = [self expandFile:kMasterShader dir:dir seen:[NSMutableSet set] error:error];
+    NSString *src = [self expandFile:kMasterShader dir:dir shape:shapePath seen:[NSMutableSet set] error:error];
     if (!src) return nil;
 
     MTLCompileOptions *opts = [MTLCompileOptions new];
     // Fractals are sensitive to tiny rounding differences, and the shaders rely
     // on exact handling of "not a number" values, so turn off risky optimisations.
     opts.mathMode = MTLMathModeSafe;
-    const char *sceneOverride = getenv("GPUCASTER_SCENE");
-    if (sceneOverride && *sceneOverride)
-        opts.preprocessorMacros = @{@"SCENE" : @(atoi(sceneOverride))};
 
     NSError *err = nil;
     id<MTLLibrary> lib = [device newLibraryWithSource:src options:opts error:&err];
@@ -228,7 +242,7 @@ struct IntersectionSet {
 
 - (BOOL)reloadShadersNow {
     NSString *err = nil;
-    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir error:&err];
+    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:self.shapePath error:&err];
     _shaderStamp = [self latestShaderModification];
     if (p) {
         _pipelines = p;
@@ -249,9 +263,10 @@ struct IntersectionSet {
     _shaderStamp = [self latestShaderModification];
     id<MTLDevice> device = _device;
     NSString *dir = self.shaderDir;
+    NSString *shape = self.shapePath;
     dispatch_async(dispatch_get_global_queue(QOS_CLASS_USER_INITIATED, 0), ^{
         NSString *err = nil;
-        Pipelines *p = [Renderer buildPipelinesWithDevice:device dir:dir error:&err];
+        Pipelines *p = [Renderer buildPipelinesWithDevice:device dir:dir shape:shape error:&err];
         dispatch_async(dispatch_get_main_queue(), ^{
             self.compiling = NO;
             if (p) {
@@ -279,11 +294,77 @@ struct IntersectionSet {
         NSDictionary *attrs = [fm attributesOfItemAtPath:[self.shaderDir stringByAppendingPathComponent:name] error:nil];
         latest = MAX(latest, [attrs.fileModificationDate timeIntervalSinceReferenceDate]);
     }
+    if (self.shapePath) {
+        NSDictionary *attrs = [fm attributesOfItemAtPath:self.shapePath error:nil];
+        latest = MAX(latest, [attrs.fileModificationDate timeIntervalSinceReferenceDate]);
+    }
     return latest;
 }
 
 - (void)reloadShadersIfFilesChanged {
     if ([self latestShaderModification] > _shaderStamp) [self reloadShadersInBackground];
+}
+
+#pragma mark - Shapes
+
+- (NSString *)shapesDir { return self.shaderDir ? [self.shaderDir stringByAppendingPathComponent:@"shapes"] : nil; }
+
+- (NSArray<NSString *> *)availableShapes {
+    NSMutableArray<NSString *> *paths = [NSMutableArray array];
+    NSString *dir = self.shapesDir;
+    if (!dir) return paths;
+    for (NSString *name in [[NSFileManager defaultManager] contentsOfDirectoryAtPath:dir error:nil]) {
+        if ([name hasSuffix:@".metal"] && ![name hasPrefix:@"."]) [paths addObject:[dir stringByAppendingPathComponent:name]];
+    }
+    [paths sortUsingComparator:^NSComparisonResult(NSString *a, NSString *b) {
+        return [a.lastPathComponent localizedStandardCompare:b.lastPathComponent];
+    }];
+    return paths;
+}
+
++ (NSString *)displayNameForShape:(NSString *)path {
+    NSString *name = [path.lastPathComponent stringByDeletingPathExtension];
+    name = [name stringByReplacingOccurrencesOfString:@"_" withString:@" "];
+    if (name.length == 0) return @"(none)";
+    return [[[name substringToIndex:1] uppercaseString] stringByAppendingString:[name substringFromIndex:1]];
+}
+
+// The shape to start with: one named for testing, else the one used last
+// time, else the default, else whatever is in the folder.
+- (NSString *)initialShape {
+    NSFileManager *fm = [NSFileManager defaultManager];
+    NSMutableArray<NSString *> *candidates = [NSMutableArray array];
+    const char *env = getenv("GPUCASTER_SHAPE");
+    if (env && *env) {
+        NSString *s = [NSString stringWithUTF8String:env];
+        [candidates addObject:s];
+        if (self.shapesDir) {
+            [candidates addObject:[self.shapesDir stringByAppendingPathComponent:s]];
+            [candidates addObject:[self.shapesDir stringByAppendingPathComponent:[s stringByAppendingString:@".metal"]]];
+        }
+    } else {
+        NSString *saved = [[NSUserDefaults standardUserDefaults] stringForKey:kShapeDefaultsKey];
+        if (saved) [candidates addObject:saved];
+    }
+    if (self.shapesDir) [candidates addObject:[self.shapesDir stringByAppendingPathComponent:kDefaultShape]];
+    for (NSString *c in candidates) {
+        BOOL isDir = NO;
+        if ([fm fileExistsAtPath:c isDirectory:&isDir] && !isDir) return c;
+    }
+    return [self availableShapes].firstObject;
+}
+
+- (void)selectShape:(NSString *)path {
+    if (!path) return;
+    self.shapePath = path;
+    [[NSUserDefaults standardUserDefaults] setObject:path forKey:kShapeDefaultsKey];
+    [self reloadShadersInBackground];
+}
+
+- (NSString *)compileErrorForShape:(NSString *)path {
+    NSString *err = nil;
+    Pipelines *p = [Renderer buildPipelinesWithDevice:_device dir:self.shaderDir shape:path error:&err];
+    return p ? nil : (err ?: @"Unknown error.");
 }
 
 #pragma mark - Textures
@@ -522,7 +603,7 @@ struct IntersectionSet {
 - (NSString *)statusText {
     static NSString *const stageNames[] = {@"Geometry", @"Normals", @"Ambient occlusion", @"Idle"};
     NSMutableString *s = [NSMutableString string];
-    [s appendFormat:@"%.1f MP  ·  %d × %d  ·  %@", _width * _height * 1e-6, _width, _height, stageNames[_cur->gen]];
+    [s appendFormat:@"%d × %d  ·  %@", _width, _height, stageNames[_cur->gen]];
     [s appendFormat:@"  ·  geometry %d, ambient %d", self.geomPasses, self.amboPasses];
     if (_cur == &_refl) [s appendString:@"  ·  reflection rays"];
     if (_scene.cb.g_viz_mode != 0) [s appendFormat:@"  ·  view: %@", kVizModeNames[_scene.cb.g_viz_mode]];

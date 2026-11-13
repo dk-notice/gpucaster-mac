@@ -50,6 +50,17 @@ extern NSString *const kVizModeNames[kNumVizModes];
 - (void)dragSecondaryDX:(float)dx dy:(float)dy shift:(BOOL)shift;
 - (void)dolly:(float)amount;          // move the camera forwards (+) or backwards (-)
 
+// --- Shapes -----------------------------------------------------------------
+// A shape is a .metal file containing the Eval() function that defines the
+// world.  The built-in ones live in the "shapes" folder inside shaderDir.
+@property (nonatomic, readonly) NSString *shapePath;           // the shape in use (full path)
+@property (nonatomic, readonly) NSString *shapesDir;
+- (NSArray<NSString *> *)availableShapes;                      // full paths, sorted by name
+- (void)selectShape:(NSString *)path;                          // compiles it, then starts again
++ (NSString *)displayNameForShape:(NSString *)path;            // "fractal_dodecahedron.metal" -> "Fractal dodecahedron"
+// Compiles a shape without using it.  Returns nil if it is fine, else the error.
+- (NSString *)compileErrorForShape:(NSString *)path;
+
 // --- Shaders ----------------------------------------------------------------
 @property (nonatomic, readonly) NSString *shaderDir;   // nil if not found
 @property (nonatomic, readonly) NSString *lastError;   // nil if the last compile worked

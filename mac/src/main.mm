@@ -53,7 +53,7 @@
 
 #pragma mark - App
 
-@interface AppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation>
+@interface AppDelegate : NSObject <NSApplicationDelegate, NSMenuItemValidation, NSMenuDelegate>
 @end
 
 @implementation AppDelegate {
@@ -61,6 +61,8 @@
     RenderView *_view;
     Renderer *_renderer;
     Sidebar *_sidebar;
+    NSPopUpButton *_shapePopup;
+    NSArray<NSString *> *_shapePopupPaths;   // what the pop-up currently lists
     NSSegmentedControl *_stageControl;
     NSButton *_autoCheck;
     NSButton *_reflCheck;
@@ -172,6 +174,11 @@
 #pragma mark - Toolbar
 
 - (NSView *)buildToolbar {
+    _shapePopup = [[NSPopUpButton alloc] initWithFrame:NSZeroRect pullsDown:NO];
+    _shapePopup.target = self;
+    _shapePopup.action = @selector(shapePicked:);
+    _shapePopup.toolTip = @"The shape being drawn (a file in the shapes folder)";
+
     _stageControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Geometry", @"Normals", @"Ambient", @"Stop"]
                                                       trackingMode:NSSegmentSwitchTrackingSelectOne
                                                             target:self
@@ -195,7 +202,7 @@
     [_status setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_status setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *bar = [NSStackView stackViewWithViews:@[_stageControl, _autoCheck, _reflCheck, clear, _status]];
+    NSStackView *bar = [NSStackView stackViewWithViews:@[_shapePopup, _stageControl, _autoCheck, _reflCheck, clear, _status]];
     bar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bar.spacing = 12;
     bar.edgeInsets = NSEdgeInsetsMake(6, 12, 6, 12);
@@ -203,8 +210,27 @@
     return bar;
 }
 
+// Keeps the shape pop-up in step with the files in the shapes folder.
+- (void)refreshShapePopup {
+    NSMutableArray<NSString *> *paths = [[_renderer availableShapes] mutableCopy];
+    NSString *current = _renderer.shapePath;
+    if (current && ![paths containsObject:current]) [paths addObject:current];   // a shape opened from elsewhere
+    if (![paths isEqualToArray:_shapePopupPaths]) {
+        _shapePopupPaths = [paths copy];
+        [_shapePopup removeAllItems];
+        for (NSString *path in paths) {
+            [_shapePopup addItemWithTitle:@""];   // (titles set below, so duplicates are allowed)
+            _shapePopup.lastItem.title = [Renderer displayNameForShape:path];
+            _shapePopup.lastItem.representedObject = path;
+        }
+    }
+    NSInteger index = current ? (NSInteger)[paths indexOfObject:current] : -1;
+    if (index >= 0 && index != NSNotFound && _shapePopup.indexOfSelectedItem != index) [_shapePopup selectItemAtIndex:index];
+}
+
 - (void)tick {
     [_renderer reloadShadersIfFilesChanged];
+    [self refreshShapePopup];
     _status.stringValue = [_renderer statusText];
     GenMode stage = _renderer.stage;
     _stageControl.selectedSegment = (stage == GenNone) ? 3 : (NSInteger)stage;
@@ -247,6 +273,17 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     [file addItem:[NSMenuItem separatorItem]];
     [self add:@"Save Image…" to:file action:@selector(saveImage:) key:@"s" mods:cmd];
     [bar addItemWithTitle:@"" action:nil keyEquivalent:@""].submenu = file;
+
+    // Shape (the list of shapes at the top is filled in by -menuNeedsUpdate:)
+    NSMenu *shape = [[NSMenu alloc] initWithTitle:@"Shape"];
+    shape.delegate = self;
+    [shape addItem:[NSMenuItem separatorItem]];
+    [self add:@"Open Shape File…" to:shape action:@selector(openShapeFile:) key:@"o" mods:cmd | NSEventModifierFlagOption];
+    [self add:@"New Shape…" to:shape action:@selector(newShape:) key:@"n" mods:cmd];
+    [shape addItem:[NSMenuItem separatorItem]];
+    [self add:@"Edit Shape in Text Editor" to:shape action:@selector(editShape:) key:@"e" mods:cmd];
+    [self add:@"Show Shape in Finder" to:shape action:@selector(revealShape:) key:@"" mods:none];
+    [bar addItemWithTitle:@"" action:nil keyEquivalent:@""].submenu = shape;
 
     // Render
     NSMenu *render = [[NSMenu alloc] initWithTitle:@"Render"];
@@ -309,10 +346,36 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     NSApp.mainMenu = bar;
 }
 
+static const NSInteger kShapeItemTag = 1000;
+
+// Rebuilds the list of shapes at the top of the Shape menu each time it opens.
+- (void)menuNeedsUpdate:(NSMenu *)menu {
+    while (menu.numberOfItems > 0 && [menu itemAtIndex:0].tag == kShapeItemTag) [menu removeItemAtIndex:0];
+    NSMutableArray<NSString *> *paths = [[_renderer availableShapes] mutableCopy];
+    NSString *current = _renderer.shapePath;
+    if (current && ![paths containsObject:current]) [paths addObject:current];
+    NSInteger at = 0;
+    for (NSString *path in paths) {
+        NSMenuItem *item = [[NSMenuItem alloc] initWithTitle:[Renderer displayNameForShape:path]
+                                                      action:@selector(shapeMenuPicked:)
+                                               keyEquivalent:@""];
+        item.target = self;
+        item.tag = kShapeItemTag;
+        item.representedObject = path;
+        [menu insertItem:item atIndex:at++];
+    }
+}
+
 // Ticks next to the menu items that are switched on.
 - (BOOL)validateMenuItem:(NSMenuItem *)item {
     SEL a = item.action;
     BOOL on = NO;
+    if (a == @selector(shapeMenuPicked:)) {
+        item.state = [item.representedObject isEqual:_renderer.shapePath] ? NSControlStateValueOn : NSControlStateValueOff;
+        return YES;
+    }
+    if (a == @selector(editShape:) || a == @selector(revealShape:) || a == @selector(newShape:))
+        return _renderer.shapePath != nil;
     if (a == @selector(stageMenu:)) {
         on = (_renderer.stage == (GenMode)item.tag);
         if (item.tag == GenAmbo) return _renderer.normalsReady || _renderer.stage == GenNormals;
@@ -329,6 +392,87 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     }
     item.state = on ? NSControlStateValueOn : NSControlStateValueOff;
     return YES;
+}
+
+#pragma mark - Shape actions
+
+- (void)shapePicked:(NSPopUpButton *)popup { [_renderer selectShape:popup.selectedItem.representedObject]; [self tick]; }
+- (void)shapeMenuPicked:(NSMenuItem *)item { [_renderer selectShape:item.representedObject]; [self tick]; }
+
+- (NSArray<UTType *> *)shapeTypes {
+    UTType *t = [UTType typeWithFilenameExtension:@"metal"];
+    return t ? @[t] : @[];
+}
+
+- (void)openShapeFile:(id)sender {
+    NSOpenPanel *panel = [NSOpenPanel openPanel];
+    panel.allowedContentTypes = [self shapeTypes];
+    panel.allowsOtherFileTypes = YES;
+    panel.message = @"Choose a shape file (.metal)";
+    if (_renderer.shapesDir) panel.directoryURL = [NSURL fileURLWithPath:_renderer.shapesDir];
+    [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
+        if (r != NSModalResponseOK) return;
+        [self->_renderer selectShape:panel.URL.path];
+        [self tick];
+    }];
+}
+
+// Copies the current shape under a new name, switches to it and opens it for editing.
+- (void)newShape:(id)sender {
+    NSString *source = _renderer.shapePath;
+    if (!source) return;
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    panel.allowedContentTypes = [self shapeTypes];
+    panel.nameFieldStringValue = @"my_shape.metal";
+    panel.message = @"Name the new shape. It starts as a copy of the current one.";
+    if (_renderer.shapesDir) panel.directoryURL = [NSURL fileURLWithPath:_renderer.shapesDir];
+    [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
+        if (r != NSModalResponseOK) return;
+        NSString *dest = panel.URL.path;
+        if ([dest isEqualToString:source]) return;
+        NSFileManager *fm = [NSFileManager defaultManager];
+        NSError *err = nil;
+        [fm removeItemAtPath:dest error:nil];   // the save panel has already asked about replacing
+        if (![fm copyItemAtPath:source toPath:dest error:&err]) {
+            dispatch_async(dispatch_get_main_queue(), ^{
+                [self showError:@"The new shape could not be created" detail:err.localizedDescription];
+            });
+            return;
+        }
+        [self->_renderer selectShape:dest];
+        [self tick];
+        [self editShape:nil];
+    }];
+}
+
+- (void)editShape:(id)sender {
+    if (!_renderer.shapePath) return;
+    NSURL *file = [NSURL fileURLWithPath:_renderer.shapePath];
+    NSWorkspace *ws = [NSWorkspace sharedWorkspace];
+    // ".metal" has no editor of its own, so use whatever opens plain text files.
+    NSURL *editor = [ws URLForApplicationToOpenContentType:UTTypePlainText];
+    if (editor) {
+        [ws openURLs:@[file] withApplicationAtURL:editor configuration:[NSWorkspaceOpenConfiguration configuration] completionHandler:nil];
+    } else {
+        [ws openURL:file];
+    }
+}
+
+- (void)revealShape:(id)sender {
+    if (!_renderer.shapePath) return;
+    [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:_renderer.shapePath]]];
+}
+
+// Puts a copy of the current shape beside a saved scene or image, as
+// "<name>.metal", so the picture can always be recreated.
+- (void)copyShapeBeside:(NSString *)savedPath {
+    NSString *source = _renderer.shapePath;
+    if (!source) return;
+    NSString *dest = [[savedPath stringByDeletingPathExtension] stringByAppendingPathExtension:@"metal"];
+    if ([dest isEqualToString:source]) return;
+    NSFileManager *fm = [NSFileManager defaultManager];
+    [fm removeItemAtPath:dest error:nil];
+    [fm copyItemAtPath:source toPath:dest error:nil];
 }
 
 #pragma mark - Render actions
@@ -433,9 +577,16 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
             });
             return;
         }
-        if (lightsOnly) [self->_renderer relight];
-        else [self->_renderer sceneReplaced];
+        if (lightsOnly) {
+            [self->_renderer relight];
+        } else {
+            [self->_renderer sceneReplaced];
+            // A scene saved by this app has its shape beside it, as "<name>.metal".
+            NSString *shape = [[panel.URL.path stringByDeletingPathExtension] stringByAppendingPathExtension:@"metal"];
+            if ([[NSFileManager defaultManager] fileExistsAtPath:shape]) [self->_renderer selectShape:shape];
+        }
         [self->_sidebar refresh];
+        [self tick];
     }];
 }
 - (void)openScene:(id)sender { [self openSceneLightsOnly:NO]; }
@@ -452,11 +603,13 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
             dispatch_async(dispatch_get_main_queue(), ^{
                 [self showError:@"The scene could not be saved" detail:@(error.c_str())];
             });
+            return;
         }
+        [self copyShapeBeside:panel.URL.path];
     }];
 }
 
-// Saves the picture, plus the scene file and a copy of eval.metal beside it,
+// Saves the picture, plus the scene file and a copy of the shape beside it,
 // so the picture can always be recreated.
 - (void)saveImage:(id)sender {
     NSSavePanel *panel = [NSSavePanel savePanel];
@@ -473,10 +626,7 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
         }
         NSString *base = [path stringByDeletingPathExtension];
         self->_renderer.scene->Export([base stringByAppendingPathExtension:@"scn"].fileSystemRepresentation, nullptr);
-        NSString *eval = [self->_renderer.shaderDir stringByAppendingPathComponent:@"eval.metal"];
-        NSString *evalCopy = [base stringByAppendingString:@".eval.metal"];
-        [[NSFileManager defaultManager] removeItemAtPath:evalCopy error:nil];
-        [[NSFileManager defaultManager] copyItemAtPath:eval toPath:evalCopy error:nil];
+        [self copyShapeBeside:path];
     }];
 }
 
@@ -490,6 +640,10 @@ static int RunSelfTest(NSString *outDir) {
     if (!device) { fprintf(stderr, "selftest: no Metal device\n"); return 1; }
     [[NSFileManager defaultManager] createDirectoryAtPath:outDir withIntermediateDirectories:YES attributes:nil error:nil];
 
+    // Always test the default shape, not whichever one the app used last,
+    // unless GPUCASTER_SHAPE names another.
+    const bool defaultShape = !getenv("GPUCASTER_SHAPE");
+    setenv("GPUCASTER_SHAPE", "blobs", 0);
     Renderer *r = [[Renderer alloc] initWithDevice:device];
     if (r.lastError) { fprintf(stderr, "selftest: shader error:\n%s\n", r.lastError.UTF8String); return 1; }
     r.autoEnabled = NO;
@@ -521,7 +675,7 @@ static int RunSelfTest(NSString *outDir) {
     if (r.amboPasses != 16 || r.stage != GenNone) { fprintf(stderr, "selftest: expected 16 ambient passes then idle, got %d\n", r.amboPasses); failures++; }
 
     // Check the stored data at a pixel in the middle of the picture (default scene only).
-    if (!getenv("GPUCASTER_SCENE")) {
+    if (defaultShape) {
         float depth; simd_float4 normal, ambo;
         [r readPixelX:480 y:400 depth:&depth normal:&normal ambo:&ambo];
         float fraction = ambo.w / MAX(r.amboPasses, 1);
@@ -538,6 +692,21 @@ static int RunSelfTest(NSString *outDir) {
         save([NSString stringWithFormat:@"view_%d.png", mode]);
     }
     [r setVizMode:0];
+
+    // Every shape in the shapes folder must compile.
+    if (defaultShape) {
+        NSArray<NSString *> *shapes = [r availableShapes];
+        int bad = 0;
+        for (NSString *path in shapes) {
+            NSString *err = [r compileErrorForShape:path];
+            if (err) {
+                fprintf(stderr, "selftest: shape %s does not compile:\n%s\n", path.lastPathComponent.UTF8String, err.UTF8String);
+                bad++;
+            }
+        }
+        printf("selftest: %d of %d shapes compile\n", (int)shapes.count - bad, (int)shapes.count);
+        if (bad || shapes.count == 0) failures++;
+    }
 
     // Scene files must survive a save and reload unchanged.
     NSString *scn = [outDir stringByAppendingPathComponent:@"roundtrip.scn"];

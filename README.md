@@ -51,29 +51,49 @@ make test
 - Every command is in the menus with its shortcut. The single-key shortcuts of
   the Windows version (G, N, A, Esc, L, C, R, F, 0-9, F1, F2) still work.
 
+## Shapes and scenes
+
+Two kinds of file describe a picture:
+
+- A **shape** is a `.metal` file containing the `Eval()` function that defines
+  the world. Ten are included in [mac/shaders/shapes](mac/shaders/shapes).
+- A **scene** is a `.scn` file holding the random seed, camera position and
+  lighting. It uses the same format as the Windows version, so old scenes open
+  here.
+
+Pick a shape from the pop-up at the left of the toolbar, or from the Shape
+menu. Any `.metal` file placed in the shapes folder appears in the list, and
+Shape > Open Shape File opens one from anywhere.
+
+| Shape | Shape |
+|---|---|
+| Blobs | Noise warped ground |
+| Fractal dodecahedron (slow) | Polyhedra plane |
+| Honeycomb floor | Reflective spheres |
+| Mandelbox | Ropey planet |
+| Mandelbulb | Sphere on plane |
+
+Saving a scene or an image also saves a copy of the shape beside it with the
+same name (`name.scn` and `name.metal`), and opening a scene loads the shape
+beside it if there is one. A scene from the Windows version has no shape file,
+so pick the matching shape yourself.
+
 ## Making new worlds
 
-Edit [mac/shaders/eval.metal](mac/shaders/eval.metal) and save. The app
-reloads it by itself; if there is a mistake, it shows the file and line and
+Choose Shape > New Shape. It copies the current shape under a new name, switches
+to it and opens it in your text editor. Edit the `Eval()` function and save; the
+app reloads it by itself. If there is a mistake, it shows the file and line and
 keeps the last version that worked.
 
-Near the top of that file, `#define SCENE 2` picks one of ten examples:
-
-| # | Scene | # | Scene |
-|---|---|---|---|
-| 1 | Sphere on a plane | 6 | Honeycomb floor |
-| 2 | Blobs | 7 | Mandelbox |
-| 3 | Reflective spheres | 8 | Mandelbulb |
-| 4 | Dodecahedra and icosahedra | 9 | Noise-warped ground |
-| 5 | Ropey planet surface | 10 | Fractal dodecahedron (slow) |
+[mac/shaders/eval_common.metal](mac/shaders/eval_common.metal) lists what a
+shape file can use.
 
 ## Files
 
 - `mac/src/` - the app (Objective-C++).
 - `mac/shaders/` - the shaders (Metal Shading Language), loaded as text when
   the app runs.
-- Scene files (`.scn`) use the same format as the Windows version, so scenes
-  can be moved between the two.
+- `mac/shaders/shapes/` - one file per shape.
 
 ## Credits and licence
 

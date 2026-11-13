@@ -1,5 +1,5 @@
 // Master shader file.  The app loads this one file; it pulls in the others.
-// To make new worlds you only need to edit eval.metal.
+// To make new worlds you only need to add or edit a file in the "shapes" folder.
 
 #include <metal_stdlib>
 using namespace metal;
@@ -35,7 +35,8 @@ struct Scene {
 
 #include "helper.metal"
 #include "noise.metal"
-#include "eval.metal"
+#include "eval_common.metal"
+#include "@shape"   // replaced by the app with the chosen file from the shapes folder
 #include "geom.metal"
 #include "norm.metal"
 #include "ambo.metal"
