@@ -25,13 +25,14 @@ Last updated: 2026-11-12
 - Scene files (`.scn`) use the Windows version's format. Saving a scene or image
   also writes the shape beside it as `name.metal`; opening a scene picks that up.
 - An idle app uses no graphics card time.
-- Lights section (after 1.0): each light is listed by where it shines from as seen
+- Lights section (new in 1.1): each light is listed by where it shines from as seen
   from the camera, with a colour swatch and an on/off tick. A direction ball shows
   the lights as dots (solid = lights the front, hollow = from behind); dragging a dot
   moves the light and double-clicking flips it. Brightness is its own slider, and a
   hold-down button shows the selected light alone.
-- Packaged as version 1.0: a self-contained, double-clickable app with an icon and
-  the shaders inside it. `make dist` produces `mac/build/Gpucaster-1.0.zip`.
+- Packaged as a self-contained, double-clickable app with an icon and the shaders
+  inside it. `make dist` produces `mac/build/Gpucaster-<version>.zip`. Current
+  version: 1.1 (set in `mac/Makefile` and `mac/Info.plist`).
 - Your own shapes live in `~/Documents/Gpucaster Shapes`, listed below the built-in
   ones. Built-in shapes inside a packaged app are read-only; Edit offers a copy.
 - A command-line mode renders a picture without a window (`--render`, see README).
@@ -190,11 +191,13 @@ the assistant on this Mac, which is why the layout snapshot exists.
 
 ## Next steps
 
-Version 1.0 is the finished baseline. New work continues on `main`; later
-milestones get their own tags (v1.1, v2.0 and so on). The reworked Lights section
-is the first change after 1.0 and is not in the installed copy or the release.
-Ideas not yet started:
+Releases so far: 1.0 (the finished port) and 1.1 (lights shown by direction with a
+direction ball, brightness slider and solo; colour picker fix; about twice the
+rendering speed). New work continues on `main`; later milestones get their own
+tags. Ideas not yet started:
 
+1. A half-detail (non-Retina) option, four times faster; offered and declined for
+   now.
 1. Save the lighting history between launches.
 2. A zoom lens for checking detail (the original's Z key).
 3. Notarisation, if an Apple developer account is ever available.
@@ -203,10 +206,11 @@ Ideas not yet started:
 
 - Published at https://github.com/dk-notice/gpucaster-mac (public). It holds only the
   Mac port (`mac/`), `README.md` and this file.
-- Version 1.0 is tagged `v1.0`, with a GitHub Release carrying `Gpucaster-1.0.zip`.
-- Version 1.0 is installed on this Mac at `/Applications/Gpucaster.app` (copied from
+- Tags `v1.0` and `v1.1`, each with a GitHub Release carrying the app zip.
+- Version 1.1 is installed on this Mac at `/Applications/Gpucaster.app` (copied from
   the release zip, 2026-11-12). It is separate from the development build in
-  `mac/build/`, which is what `make run` opens.
+  `mac/build/`, which is what `make run` opens. The installed copy has no
+  diagnostic log; that is on only when running from the source folder.
 - The original Windows release stays in this folder on disk but is ignored by git, so
   it is never uploaded. The earlier local history that included it is kept on the
   local branch `local-full-history`; do not push that branch.

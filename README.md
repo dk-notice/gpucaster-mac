@@ -25,7 +25,7 @@ See [state.md](state.md) for current status, known gaps and next steps.
 
 ## Install
 
-Download `Gpucaster-1.0.zip` from the
+Download the latest `Gpucaster` zip from the
 [Releases page](https://github.com/dk-notice/gpucaster-mac/releases), unzip it
 and move Gpucaster to your Applications folder.
 
