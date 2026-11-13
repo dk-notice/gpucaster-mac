@@ -157,6 +157,9 @@ milestones get their own tags (v1.1, v2.0 and so on). Ideas not yet started:
 - Published at https://github.com/dk-notice/gpucaster-mac (public). It holds only the
   Mac port (`mac/`), `README.md` and this file.
 - Version 1.0 is tagged `v1.0`, with a GitHub Release carrying `Gpucaster-1.0.zip`.
+- Version 1.0 is installed on this Mac at `/Applications/Gpucaster.app` (copied from
+  the release zip, 2026-11-12). It is separate from the development build in
+  `mac/build/`, which is what `make run` opens.
 - The original Windows release stays in this folder on disk but is ignored by git, so
   it is never uploaded. The earlier local history that included it is kept on the
   local branch `local-full-history`; do not push that branch.
