@@ -95,6 +95,17 @@
     NSString *_lastChangeName;       // for treating one slider drag as one step
     CFTimeInterval _lastChangeTime;
 
+    // Large image export
+    Renderer *_exporter;             // builds the big picture; nil when not exporting
+    NSString *_exportPath;
+    NSPanel *_exportSheet;
+    NSProgressIndicator *_exportBar;
+    NSTextField *_exportLabel;
+    BOOL _exportCancelled;
+    BOOL _pausedBeforeExport;
+    double _exportTiles;             // tiles per slice, tuned as it goes
+    CFTimeInterval _exportStart;
+
     // Recent lightings, newest first
     std::vector<Lighting> _history;
     BOOL _historyDirty;
@@ -187,6 +198,18 @@
     // For testing the layout without a person watching: save a picture of the
     // window's controls after a few seconds, then quit.  (The 3D picture
     // itself is drawn by the graphics card and does not appear in this copy.)
+    // For testing the export without a person: GPUCASTER_EXPORT=<file.png>
+    // (and optionally GPUCASTER_EXPORT_SCALE=<n>) exports once the window is
+    // up, then quits.
+    const char *exportTo = getenv("GPUCASTER_EXPORT");
+    if (exportTo && *exportTo) {
+        NSString *path = [NSString stringWithUTF8String:exportTo];
+        int scale = getenv("GPUCASTER_EXPORT_SCALE") ? MAX(1, atoi(getenv("GPUCASTER_EXPORT_SCALE"))) : 2;
+        dispatch_after(dispatch_time(DISPATCH_TIME_NOW, 2 * NSEC_PER_SEC), dispatch_get_main_queue(), ^{
+            [self startExportWidth:self->_renderer.imageWidth * scale height:self->_renderer.imageHeight * scale path:path];
+        });
+    }
+
     const char *shot = getenv("GPUCASTER_UISHOT");
     if (shot && *shot) {
         NSString *path = [NSString stringWithUTF8String:shot];
@@ -332,21 +355,28 @@
     [self tick];
 }
 
-- (void)undo:(id)sender {
-    if (_undo.count == 0) return;
-    [_redo addObject:[self currentEntry]];
-    UndoEntry *e = _undo.lastObject;
-    [_undo removeLastObject];
-    [self applyEntry:e];
+- (BOOL)entry:(UndoEntry *)a matches:(UndoEntry *)b {
+    BOOL sameShape = (a.shape == b.shape) || [a.shape isEqualToString:b.shape];
+    return sameShape && SceneState::SameScene(a->snapshot, b->snapshot);
 }
 
-- (void)redo:(id)sender {
-    if (_redo.count == 0) return;
-    [_undo addObject:[self currentEntry]];
-    UndoEntry *e = _redo.lastObject;
-    [_redo removeLastObject];
-    [self applyEntry:e];
+// Steps back (or forward) to the nearest recorded state that differs from
+// now.  Records that turned out to change nothing - a click on the picture
+// that didn't move the camera, say - are skipped.
+- (void)stepFrom:(NSMutableArray<UndoEntry *> *)from to:(NSMutableArray<UndoEntry *> *)to {
+    UndoEntry *now = [self currentEntry];
+    while (from.count > 0) {
+        UndoEntry *e = from.lastObject;
+        [from removeLastObject];
+        if ([self entry:e matches:now]) continue;
+        [to addObject:now];
+        [self applyEntry:e];
+        return;
+    }
 }
+
+- (void)undo:(id)sender { [self stepFrom:_undo to:_redo]; }
+- (void)redo:(id)sender { [self stepFrom:_redo to:_undo]; }
 
 // Adds the current lighting to the front of the recent list.
 - (void)rememberLighting {
@@ -396,6 +426,7 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
     [self add:@"Save Scene…" to:file action:@selector(saveScene:) key:@"s" mods:cmd | shift];
     [file addItem:[NSMenuItem separatorItem]];
     [self add:@"Save Image…" to:file action:@selector(saveImage:) key:@"s" mods:cmd];
+    [self add:@"Export Large Image…" to:file action:@selector(exportLargeImage:) key:@"e" mods:cmd | shift];
     [bar addItemWithTitle:@"" action:nil keyEquivalent:@""].submenu = file;
 
     // Edit
@@ -783,6 +814,139 @@ static const NSInteger kShapeItemTag = 1000;
     }];
 }
 
+#pragma mark - Large image export
+
+// Asks for a size and a file, then builds the picture again at that size in
+// the background, with a progress sheet, and saves it.
+- (void)exportLargeImage:(id)sender {
+    if (_exporter) return;
+    const int w = _renderer.imageWidth, h = _renderer.imageHeight;
+
+    NSPopUpButton *sizes = [[NSPopUpButton alloc] initWithFrame:NSMakeRect(0, 0, 330, 26) pullsDown:NO];
+    for (int m : {2, 3, 4, 6, 8, 12, 16}) {
+        if (![_renderer canRenderWidth:w * m height:h * m]) continue;
+        [sizes addItemWithTitle:[NSString stringWithFormat:@"%d × the window:  %d × %d  (%.0f megapixels)", m, w * m, h * m,
+                                                           (double)w * m * h * m * 1e-6]];
+        sizes.lastItem.tag = m;
+    }
+    if (sizes.numberOfItems == 0) {
+        [self showError:@"This picture is already as large as this Mac can render" detail:@"Make the window smaller and try again."];
+        return;
+    }
+    [sizes selectItemAtIndex:MIN(2, sizes.numberOfItems - 1)];
+    NSTextField *label = [NSTextField labelWithString:@"Size:"];
+    NSStackView *accessory = [NSStackView stackViewWithViews:@[label, sizes]];
+    accessory.edgeInsets = NSEdgeInsetsMake(8, 12, 8, 12);
+
+    NSSavePanel *panel = [NSSavePanel savePanel];
+    panel.allowedContentTypes = @[UTTypePNG];
+    panel.nameFieldStringValue = [NSString stringWithFormat:@"gpucaster_%08x_large.png", _renderer.scene->cb.g_scene_seed];
+    panel.message = @"The picture is built again at the larger size, using the Quality settings in the sidebar.";
+    panel.accessoryView = accessory;
+    [panel beginSheetModalForWindow:_window completionHandler:^(NSModalResponse r) {
+        if (r != NSModalResponseOK) return;
+        int m = (int)sizes.selectedItem.tag;
+        NSString *path = panel.URL.path;
+        dispatch_async(dispatch_get_main_queue(), ^{ [self startExportWidth:w * m height:h * m path:path]; });
+    }];
+}
+
+- (void)startExportWidth:(int)width height:(int)height path:(NSString *)path {
+    _exporter = [_renderer exportCopyWithWidth:width height:height];
+    _exportPath = path;
+    _exportCancelled = NO;
+    _exportTiles = 4;
+    _exportStart = CACurrentMediaTime();
+    _pausedBeforeExport = _renderer.paused;
+    _renderer.paused = YES;   // give the graphics card to the big picture
+
+    _exportLabel = [NSTextField labelWithString:[NSString stringWithFormat:@"Rendering %d × %d…", width, height]];
+    _exportBar = [NSProgressIndicator new];
+    _exportBar.style = NSProgressIndicatorStyleBar;
+    _exportBar.indeterminate = NO;
+    _exportBar.minValue = 0;
+    _exportBar.maxValue = 1;
+    [_exportBar.widthAnchor constraintEqualToConstant:340].active = YES;
+    NSButton *cancel = [NSButton buttonWithTitle:@"Cancel" target:self action:@selector(cancelExport:)];
+    cancel.keyEquivalent = @"\e";
+    NSStackView *stack = [NSStackView stackViewWithViews:@[_exportLabel, _exportBar, cancel]];
+    stack.orientation = NSUserInterfaceLayoutOrientationVertical;
+    stack.alignment = NSLayoutAttributeLeading;
+    stack.spacing = 10;
+    stack.edgeInsets = NSEdgeInsetsMake(18, 20, 16, 20);
+    _exportSheet = [[NSPanel alloc] initWithContentRect:NSMakeRect(0, 0, 380, 120)
+                                              styleMask:NSWindowStyleMaskTitled
+                                                backing:NSBackingStoreBuffered
+                                                  defer:NO];
+    _exportSheet.contentView = stack;
+    [_window beginSheet:_exportSheet completionHandler:nil];
+    [self exportStep];
+}
+
+- (void)cancelExport:(id)sender { _exportCancelled = YES; }
+
+// One slice of the export.  Each slice starts the next when the graphics card
+// has finished it, so the app stays responsive throughout.
+- (void)exportStep {
+    if (!_exporter) return;
+    if (_exportCancelled) {
+        [self finishExportSaved:NO error:nil];
+        return;
+    }
+    if (_exporter.finished) {
+        _exportLabel.stringValue = @"Saving…";
+        dispatch_async(dispatch_get_main_queue(), ^{
+            BOOL ok = [self->_exporter saveImageToPNG:self->_exportPath];
+            [self finishExportSaved:ok error:ok ? nil : @"The image could not be written."];
+        });
+        return;
+    }
+    double p = _exporter.progress;
+    if (p >= 0) {
+        _exportBar.doubleValue = p;
+        double elapsed = CACurrentMediaTime() - _exportStart;
+        if (p > 0.02 && elapsed > 2) {
+            int left = (int)lround(elapsed * (1 - p) / p);
+            _exportLabel.stringValue = [NSString stringWithFormat:@"Rendering %d × %d…  about %d:%02d left",
+                                                                  _exporter.imageWidth, _exporter.imageHeight, left / 60, left % 60];
+        }
+    }
+    const int tiles = (int)MAX(1.0, _exportTiles);
+    __weak AppDelegate *weakSelf = self;
+    [_exporter stepOffscreenTiles:tiles completion:^(double seconds) {
+        AppDelegate *me = weakSelf;
+        if (!me) return;
+        // Aim for slices of about a twentieth of a second.
+        if (seconds > 0) me->_exportTiles = MIN(8192.0, MAX(1.0, 0.5 * me->_exportTiles + 0.5 * 0.05 / (seconds / tiles)));
+        [me exportStep];
+    }];
+}
+
+- (void)finishExportSaved:(BOOL)saved error:(NSString *)error {
+    NSString *path = _exportPath;
+    if (saved) {
+        // Keep the scene and shape beside the picture, as Save Image does.
+        _exporter.scene->Export([[path stringByDeletingPathExtension] stringByAppendingPathExtension:@"scn"].fileSystemRepresentation, nullptr);
+        [self copyShapeBeside:path];
+    }
+    _exporter = nil;   // frees the large textures
+    _exportPath = nil;
+    [_window endSheet:_exportSheet];
+    _exportSheet = nil;
+    _renderer.paused = _pausedBeforeExport;
+    [self tick];
+    if (getenv("GPUCASTER_EXPORT")) {
+        printf("export: %s in %.1f s -> %s\n", saved ? "saved" : "NOT saved", CACurrentMediaTime() - _exportStart, path.UTF8String);
+        [NSApp terminate:nil];
+        return;
+    }
+    if (saved) {
+        [[NSWorkspace sharedWorkspace] activateFileViewerSelectingURLs:@[[NSURL fileURLWithPath:path]]];
+    } else if (error) {
+        [self showError:@"The large image could not be saved" detail:error];
+    }
+}
+
 @end
 
 #pragma mark - Self-test
@@ -938,6 +1102,27 @@ static int RunSelfTest(NSString *outDir) {
                 writeToFile:[outDir stringByAppendingPathComponent:[NSString stringWithFormat:@"thumb_%d.png", (int)i]] atomically:YES];
         }
         if (!differ || !untouched) { fprintf(stderr, "selftest: lighting thumbnails wrong (%d %d)\n", differ, untouched); failures++; }
+    }
+
+    // Large export: a copy of the renderer builds the same scene at twice the
+    // size by itself, and saves a picture with the right dimensions.
+    {
+        Renderer *small = [[Renderer alloc] initWithDevice:device];
+        small.autoGeomPasses = 12;
+        small.autoAmboPasses = 4;
+        [small setImageWidth:480 height:300];
+        Renderer *big = [small exportCopyWithWidth:960 height:600];
+        BOOL done = [big runUntilFinished:200];
+        NSString *path = [outDir stringByAppendingPathComponent:@"5_export_2x.png"];
+        BOOL saved = done && [big saveImageToPNG:path];
+        NSImageRep *rep = saved ? [NSImageRep imageRepWithContentsOfFile:path] : nil;
+        bool sameScene = memcmp(small.scene->cb.g_light_col, big.scene->cb.g_light_col, sizeof(big.scene->cb.g_light_col)) == 0 &&
+                         small.scene->cb.g_scene_seed == big.scene->cb.g_scene_seed;
+        if (!saved || rep.pixelsWide != 960 || rep.pixelsHigh != 600 || !sameScene || ![small canRenderWidth:960 height:600] ||
+            [small canRenderWidth:20000 height:20000]) {
+            fprintf(stderr, "selftest: large export failed (done %d, saved %d, %ld x %ld)\n", done, saved, (long)rep.pixelsWide, (long)rep.pixelsHigh);
+            failures++;
+        }
     }
 
     // Every shape in the shapes folder must compile.

@@ -118,6 +118,66 @@ struct IntersectionSet {
 
 - (SceneState *)scene { return &_scene; }
 
+#pragma mark - Large pictures
+
+// Memory needed per pixel: two depth textures, normals, ambient occlusion and
+// the finished picture, for primary rays and (possibly) reflected rays.
+static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
+
+- (BOOL)canRenderWidth:(int)width height:(int)height {
+    if (width < 16 || height < 16 || width > 16384 || height > 16384) return NO;
+    double bytes = (double)width * height * kBytesPerPixel;
+    return bytes < 0.6 * (double)_device.recommendedMaxWorkingSetSize;
+}
+
+- (Renderer *)exportCopyWithWidth:(int)width height:(int)height {
+    Renderer *r = [[Renderer alloc] initAsCopyOf:self];
+    [r setImageWidth:width height:height];
+    return r;
+}
+
+// Shares the compiled shaders and fixed textures of 'o', and copies its scene.
+- (instancetype)initAsCopyOf:(Renderer *)o {
+    if ((self = [super init])) {
+        _device = o->_device;
+        _queue = [_device newCommandQueue];
+        _cur = &_main;
+        _mouseTarget = -1;
+        _autoEnabled = YES;
+        _autoActive = YES;
+        _autoGeomPasses = o.autoGeomPasses;
+        _autoAmboPasses = o.autoAmboPasses;
+        _amboTarget = _autoAmboPasses;
+        _tilesPerFrame = 4;
+        _shaderDir = o.shaderDir;
+        _shapePath = o.shapePath;
+        _shaderStamp = o->_shaderStamp;
+        _shapeParams = o.shapeParams;
+        _pipelines = o->_pipelines;
+        _scene = o->_scene;
+        _scene.cb.g_viz_mode = 0;
+        _linearWrap = o->_linearWrap;
+        _nearestWrap = o->_nearestWrap;
+        _nearestClamp = o->_nearestClamp;
+        _linearClamp = o->_linearClamp;
+        _amboDirs = o->_amboDirs;
+        _normalDirs = o->_normalDirs;
+        _dummy = o->_dummy;
+        [self uploadNoise];
+    }
+    return self;
+}
+
+- (void)stepOffscreenTiles:(int)tiles completion:(void (^)(double gpuSeconds))completion {
+    id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    [self stepInto:cb maxTiles:MAX(tiles, 1) honourPause:NO];
+    [cb addCompletedHandler:^(id<MTLCommandBuffer> done) {
+        double seconds = done.GPUEndTime - done.GPUStartTime;
+        dispatch_async(dispatch_get_main_queue(), ^{ completion(seconds); });
+    }];
+    [cb commit];
+}
+
 #pragma mark - Shaders
 
 // The shaders live outside the app bundle so they can be edited.  Look for a

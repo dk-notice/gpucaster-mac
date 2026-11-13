@@ -111,6 +111,16 @@ extern NSString *const kVizModeNames[kNumVizModes];
 - (NSArray<NSImage *> *)thumbnailsForLightings:(const std::vector<Lighting> &)lightings width:(int)width;
 - (BOOL)saveImageToPNG:(NSString *)path;
 
+// --- Large pictures ---------------------------------------------------------
+// Whether this Mac's graphics card can hold a picture of this size.
+- (BOOL)canRenderWidth:(int)width height:(int)height;
+// A separate renderer with a copy of this one's scene, shape and quality
+// settings, set up to build the same picture at another size by itself.
+- (Renderer *)exportCopyWithWidth:(int)width height:(int)height;
+// Does a slice of work without waiting for it; calls back on the main thread
+// with how long the graphics card took.
+- (void)stepOffscreenTiles:(int)tiles completion:(void (^)(double gpuSeconds))completion;
+
 // --- Off-screen use (self-test) ---------------------------------------------
 - (void)setImageWidth:(int)width height:(int)height;
 - (void)runPasses:(int)passes;        // runs whole passes of the current stage and waits

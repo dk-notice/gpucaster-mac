@@ -14,11 +14,10 @@ graphics system and the native Mac interface.
 
 ## Status
 
-Working, but young. All four rendering stages (geometry, normals, ambient
-occlusion, relighting) and the reflection pass are ported, and all ten example
-scenes from the original render. It has not yet been compared side by side
-with the Windows version. See [state.md](state.md) for current status, known
-gaps and next steps.
+Working. All four rendering stages (geometry, normals, ambient occlusion,
+relighting) and the reflection pass are ported, all ten example shapes from the
+original render, and the output has been checked against the Windows version.
+See [state.md](state.md) for current status, known gaps and next steps.
 
 ## Requirements
 
@@ -45,11 +44,19 @@ make test
 - **Drag** to orbit the camera. **Scroll**, **pinch** or **right-drag** to move
   forwards and backwards. **Shift-drag** slides sideways; **Control-drag** or
   **Option-drag** rolls.
-- With **Auto** ticked, the picture builds itself: geometry, then normals, then
-  ambient occlusion. Moving the camera starts it again.
-- Press **L** for random lighting, and use the sidebar to adjust it.
+- **The picture builds itself**: geometry, then normals, then shading, and then
+  reflections if the surface is reflective. The toolbar shows progress.
+  **Pause** holds it, **Refine More** adds shading passes to a finished
+  picture, and **Restart** begins again. Moving the camera restarts it.
+- Press **L** for random lighting, and use the sidebar to adjust it. The last
+  twelve lightings are kept as small pictures in the sidebar; click one to go
+  back to it.
+- **Cmd-Z** undoes any change: lighting, camera, shape settings, shape, scene.
+- **File > Export Large Image** builds the picture again at up to sixteen times
+  the window's size, limited by the graphics card's memory, and saves a PNG.
 - Every command is in the menus with its shortcut. The single-key shortcuts of
-  the Windows version (G, N, A, Esc, L, C, R, F, 0-9, F1, F2) still work.
+  the Windows version (G, N, A, Esc, L, C, R, F, 0-9, F1, F2) still work, for
+  running stages by hand.
 
 ## Shapes and scenes
 
@@ -85,8 +92,18 @@ to it and opens it in your text editor. Edit the `Eval()` function and save; the
 app reloads it by itself. If there is a mistake, it shows the file and line and
 keeps the last version that worked.
 
-[mac/shaders/eval_common.metal](mac/shaders/eval_common.metal) lists what a
-shape file can use.
+A comment line near the top of a shape file, such as
+
+```
+// param: twist = 0.3 (0.0 to 1.0)
+```
+
+makes a "Twist" slider in the sidebar and lets the code use `twist` as a
+number. Moving the slider redraws the picture without recompiling, and the
+value is saved in scene files.
+
+[mac/shaders/eval_common.metal](mac/shaders/eval_common.metal) lists everything
+a shape file can use.
 
 ## Files
 

@@ -345,6 +345,30 @@ static bool SameFrame(const Frame &a, const Frame &b) {
     return simd_equal(a.pos, b.pos) && simd_equal(a.x, b.x) && simd_equal(a.y, b.y) && simd_equal(a.z, b.z) && a.fov == b.fov;
 }
 
+bool SceneState::SameScene(const Snapshot &a, const Snapshot &b) {
+    const Uniforms &x = a.cb, &y = b.cb;
+    if (x.g_scene_seed != y.g_scene_seed || !SameFrame(a.camera, b.camera)) return false;
+    if (memcmp(x.g_dialog_coeffs, y.g_dialog_coeffs, sizeof(x.g_dialog_coeffs)) != 0) return false;
+    // Lighting: the arrays of light settings, then the single values.
+    if (memcmp(x.g_light_dir, y.g_light_dir, sizeof(x.g_light_dir)) != 0 ||
+        memcmp(x.g_light_col, y.g_light_col, sizeof(x.g_light_col)) != 0 ||
+        memcmp(x.g_light_wrap, y.g_light_wrap, sizeof(x.g_light_wrap)) != 0 ||
+        memcmp(x.g_light_spec_scale, y.g_light_spec_scale, sizeof(x.g_light_spec_scale)) != 0 ||
+        memcmp(x.g_light_spec_enabled, y.g_light_spec_enabled, sizeof(x.g_light_spec_enabled)) != 0 ||
+        memcmp(&x.g_fog_color, &y.g_fog_color, sizeof(x.g_fog_color)) != 0 ||
+        memcmp(&x.g_fog_params, &y.g_fog_params, sizeof(x.g_fog_params)) != 0)
+        return false;
+    return x.kLightUseDirectionalAmbo == y.kLightUseDirectionalAmbo &&
+           x.kLightAmboDiffuseUnLitThresh == y.kLightAmboDiffuseUnLitThresh &&
+           x.kLightAmboDiffuseFullyLitThresh == y.kLightAmboDiffuseFullyLitThresh &&
+           x.kLightAmboDiffuseExponent == y.kLightAmboDiffuseExponent &&
+           x.kLightAmboSpecLo == y.kLightAmboSpecLo && x.kLightAmboSpecHi == y.kLightAmboSpecHi &&
+           x.kLightAmboDirScale == y.kLightAmboDirScale && x.kLightAmboDirBias == y.kLightAmboDirBias &&
+           x.kLightSpecStr == y.kLightSpecStr && x.kLightSpecPow == y.kLightSpecPow &&
+           x.kLightScale == y.kLightScale && x.kLightSat == y.kLightSat &&
+           x.kReflectivity == y.kReflectivity && x.kSurfaceColorAmount == y.kSurfaceColorAmount;
+}
+
 SceneState::Change SceneState::RestoreSnapshot(const Snapshot &s) {
     Change change = LightingOnly;
     if (!SameFrame(camera, s.camera)) change = PictureRestart;

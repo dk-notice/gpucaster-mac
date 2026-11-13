@@ -70,6 +70,8 @@ public:
     enum Change { LightingOnly, PictureRestart, NewSeed };
 
     Snapshot GetSnapshot() const;
+    // True if two snapshots describe the same scene (same seed, camera, shape values and lighting).
+    static bool SameScene(const Snapshot &a, const Snapshot &b);
     Change RestoreSnapshot(const Snapshot &snapshot);
 
     Lighting GetLighting() const;
