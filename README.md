@@ -66,11 +66,18 @@ inside the app.
   flip it between front and behind, and hold **Hold to see this light alone**
   to see what one light contributes.
 - **Cmd-Z** undoes any change: lighting, camera, shape settings, shape, scene.
-- **Experimental** (a collapsed section at the bottom of the sidebar) has two
-  ways of trading accuracy for speed: **Half detail** draws a quarter of the
-  pixels and enlarges the result, and **Fast math** lets the graphics card take
-  shortcuts in arithmetic. The section shows the current speed in passes per
-  second, so you can see what each one buys.
+- **Experimental** (a collapsed section at the bottom of the sidebar) has
+  options that are off by default, and shows the current speed in passes per
+  second so you can see what each one buys:
+  - **Half detail** draws a quarter of the pixels and enlarges the result
+    (about four times faster), and **Sharpen Half detail with MetalFX**
+    enlarges it with Apple's upscaler for crisper edges.
+  - **Fast math** lets the graphics card take shortcuts in arithmetic (up to
+    three times faster on some shapes).
+  - **Skip empty sky** stops testing empty parts of the picture after 16
+    geometry passes.
+  - **Extended brightness** shows colours brighter than white as brighter, on
+    displays that support it.
 - **File > Export Large Image** builds the picture again at up to sixteen times
   the window's size, limited by the graphics card's memory, and saves a PNG.
 - Every command is in the menus with its shortcut. The single-key shortcuts of

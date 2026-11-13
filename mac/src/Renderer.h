@@ -114,6 +114,19 @@ extern NSString *const kVizModeNames[kNumVizModes];
 // 1 = full detail; 2 = render at half the window's resolution (a quarter of
 // the pixels) and enlarge the result to fit.
 @property (nonatomic) int detailDivisor;
+// With Half detail on: enlarge the picture with MetalFX, Apple's upscaler,
+// which gives a sharper result than plain enlargement.  Ignored at full detail.
+@property (nonatomic) BOOL sharpUpscale;
+@property (nonatomic, readonly) BOOL sharpUpscaleAvailable;   // NO if this Mac's graphics card can't do it
+// After 16 geometry passes, stop testing pixels (and their neighbours) where
+// nothing has been found.  Faster when much of the picture is empty; a thin
+// feature that hadn't been found by then is missed.
+@property (nonatomic) BOOL skipEmptySky;
+// Extended brightness: on displays that support it (such as the XDR displays
+// in recent MacBook Pros), show colours brighter than white as brighter,
+// instead of clipping them to white.  Saved images are unaffected.
+@property (nonatomic) BOOL edrOutput;
+@property (nonatomic, readonly) BOOL edrAvailable;   // known once the window is on a screen
 // Passes completed per second, measured over the last few seconds (0 if unknown).
 @property (nonatomic, readonly) double passesPerSecond;
 
@@ -144,6 +157,13 @@ extern NSString *const kVizModeNames[kNumVizModes];
 // Does a slice of work without waiting for it; calls back on the main thread
 // with how long the graphics card took.
 - (void)stepOffscreenTiles:(int)tiles completion:(void (^)(double gpuSeconds))completion;
+
+// Saves the picture as it would appear in a window of the given size in
+// pixels (enlarged, with or without MetalFX).  For checking the upscaling.
+- (BOOL)saveEnlargedToPNG:(NSString *)path width:(int)width height:(int)height sharp:(BOOL)sharp;
+
+// The brightest colour channel anywhere in the stored picture (1 = white).
+- (float)brightestValueInPicture;
 
 // --- Off-screen use (self-test) ---------------------------------------------
 - (void)setImageWidth:(int)width height:(int)height;

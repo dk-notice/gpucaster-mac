@@ -22,7 +22,7 @@ HDR := src/Renderer.h src/Sidebar.h src/LightControls.h src/SceneState.h shaders
 CXXFLAGS   := -std=c++17 -fobjc-arc -O2 -Wall -Wextra -mmacosx-version-min=15.0
 FRAMEWORKS := -framework Cocoa -framework Metal -framework MetalKit \
               -framework QuartzCore -framework ImageIO -framework CoreGraphics \
-              -framework UniformTypeIdentifiers
+              -framework UniformTypeIdentifiers -framework MetalFX
 
 all: bundle
 

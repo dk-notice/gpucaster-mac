@@ -63,6 +63,23 @@ float GeomPS(float2 uv) {
     const float3 ray_start = r.ray_start;
     const float3 ray_dir = r.ray_dir;
 
+    // Experimental "skip empty sky": once enough passes have gone by, stop
+    // testing a pixel where nothing has been found - provided none of its four
+    // neighbours has found anything either, so a surface can still spread
+    // outwards from its edges.  Reflection rays from pixels with no surface
+    // at all are skipped too; nothing ever reads them.
+    if (g_skip_empty_after > 0) {
+        if (g_intersection_set == 1 && r.main_depth <= 0) return 0;
+        if (g_geom_frames_since_geom_clear >= g_skip_empty_after && r.prev_depth_along_ray <= 0) {
+            float near = 0;
+            near = max(near, tex_prev_depth.sample(sam_nearest_clamp, uv + g_image_size.zw * float2( 1, 0), level(0)).x);
+            near = max(near, tex_prev_depth.sample(sam_nearest_clamp, uv + g_image_size.zw * float2(-1, 0), level(0)).x);
+            near = max(near, tex_prev_depth.sample(sam_nearest_clamp, uv + g_image_size.zw * float2(0,  1), level(0)).x);
+            near = max(near, tex_prev_depth.sample(sam_nearest_clamp, uv + g_image_size.zw * float2(0, -1), level(0)).x);
+            if (near <= 0) return 0;
+        }
+    }
+
     // Test more points along the ray, but don't bother testing anything beyond
     // the nearest known surface depth.
     float best_t = (r.prev_depth_along_ray <= 0) ? max_dist : r.prev_depth_along_ray;

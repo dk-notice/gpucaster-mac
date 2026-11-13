@@ -122,7 +122,14 @@ struct Uniforms {
     // (a huge number when no pass is part-way through).
     u32   g_main_ambo_tiles_done;
     u32   g_refl_ambo_tiles_done;
-    float pad0;
+    // Experimental: after this many geometry passes, stop testing pixels where
+    // nothing has been found (0 = never stop).
+    u32   g_skip_empty_after;
+
+    // Experimental: 1 = keep colours brighter than white instead of clipping
+    // them, for displays that can show extended brightness.
+    u32   g_hdr_output;
+    u32   pad1, pad2, pad3;
 };
 
 // Everything that changes for each tile drawn.

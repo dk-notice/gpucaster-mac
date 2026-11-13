@@ -115,3 +115,17 @@ fragment float4 fs_display(VSOut in [[stage_in]],
                            constant float4& view_size [[buffer(0)]]) {
     return image.sample(s, in.pos.xy * view_size.zw);
 }
+
+// The same, for a window showing extended brightness.  The stored picture is
+// encoded for an ordinary display; this converts it to linear light, which is
+// what an extended-range window expects, and limits it to what the display
+// can show right now (hdr.x, where 1 is ordinary white).
+fragment float4 fs_display_hdr(VSOut in [[stage_in]],
+                               texture2d<float> image [[texture(0)]],
+                               sampler s [[sampler(0)]],
+                               constant float4& view_size [[buffer(0)]],
+                               constant float4& hdr [[buffer(1)]]) {
+    float3 v = max(image.sample(s, in.pos.xy * view_size.zw).rgb, float3(0));
+    float3 linear_light = pow(v, float3(2.2));
+    return float4(min(linear_light, float3(hdr.x)), 1);
+}

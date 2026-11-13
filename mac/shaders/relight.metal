@@ -221,5 +221,8 @@ float4 RelightPS(float2 uv) {
     // Gamma correction:
     final_color = pow(max(final_color, float3(0)), float3(kFinalGamma));
 
+    // Normally anything brighter than white is clipped.  With extended
+    // brightness on, it is kept for the display to show as brighter than white.
+    if (g_hdr_output != 0) return float4(max(final_color, float3(0)), 1);
     return float4(saturate(final_color), 1);
 }

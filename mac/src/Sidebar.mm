@@ -81,6 +81,9 @@ typedef NS_ENUM(int, ChangeKind) {
     NSMutableArray<NSStackView *> *_disclosures;   // collapsible groups, indexed by their arrow button's tag
     NSTextField *_speedLabel;
     NSButton *_halfDetail;
+    NSButton *_sharpUpscale;
+    NSButton *_skipSky;
+    NSButton *_edr;
     NSButton *_fastMath;
     NSStackView *_shapeSection;   // sliders for the values the current shape declares
     NSMutableArray<SliderEntry *> *_shapeEntries;   // indexed by slider tag - kShapeTagBase
@@ -517,13 +520,19 @@ static void ColorInto(NSColor *color, f4 *out) {
 
     // ---- Experimental (hidden until asked for) ----
     [self beginDisclosure:@"Experimental"];
-    [self addWrappedNote:@"Ways of trading accuracy for speed. They are remembered between launches but are not saved in scenes, and large exports always use full detail."];
+    [self addWrappedNote:@"Options that are off by default: most trade a little accuracy for speed. They are remembered between launches but are not saved in scenes, and large exports always use full detail."];
     _speedLabel = [self label:@"Speed: not measured yet" bold:NO];
     _speedLabel.textColor = NSColor.labelColor;
     _speedLabel.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
     [_target addArrangedSubview:_speedLabel];
     _halfDetail = [self addCheckbox:@"Half detail" action:@selector(halfDetailChanged:)];
     [self addWrappedNote:@"Draws a quarter of the pixels and enlarges the result. About four times faster; the picture is softer."];
+    _sharpUpscale = [self addCheckbox:@"Sharpen Half detail with MetalFX" action:@selector(sharpUpscaleChanged:)];
+    [self addWrappedNote:@"Enlarges the half-size picture with Apple's upscaler. Crisper edges than plain enlargement; fine noisy detail can look harsher."];
+    _skipSky = [self addCheckbox:@"Skip empty sky" action:@selector(skipSkyChanged:)];
+    [self addWrappedNote:@"After 16 geometry passes, stops testing parts of the picture where nothing has been found. Faster when there is a lot of empty background; a thin feature not yet found by then is missed."];
+    _edr = [self addCheckbox:@"Extended brightness" action:@selector(edrChanged:)];
+    [self addWrappedNote:@"On displays that can go brighter than white (such as recent MacBook Pro screens), shows very bright parts of the picture as brighter, instead of clipping them to white. Only what you see changes; saved images are the same."];
     _fastMath = [self addCheckbox:@"Fast math" action:@selector(fastMathChanged:)];
     [self addWrappedNote:@"Lets the graphics card take shortcuts in arithmetic. Much faster for some shapes (three to four times for the Mandelbox and Blobs), little different for others. In tests the picture was almost identical, but it can differ. The shaders are recompiled when this changes."];
     [self endDisclosure];
@@ -790,6 +799,29 @@ static void ColorInto(NSColor *color, f4 *out) {
 
 static NSString *const kPrefHalfDetail = @"HalfDetail";
 static NSString *const kPrefFastMath = @"FastMath";
+static NSString *const kPrefSharpUpscale = @"SharpUpscale";
+static NSString *const kPrefSkipSky = @"SkipEmptySky";
+
+static NSString *const kPrefEDR = @"ExtendedBrightness";
+
+- (void)edrChanged:(NSButton *)b {
+    BOOL on = (b.state == NSControlStateValueOn);
+    _renderer.edrOutput = on;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPrefEDR];
+}
+
+- (void)sharpUpscaleChanged:(NSButton *)b {
+    BOOL on = (b.state == NSControlStateValueOn);
+    _renderer.sharpUpscale = on;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPrefSharpUpscale];
+}
+
+- (void)skipSkyChanged:(NSButton *)b {
+    BOOL on = (b.state == NSControlStateValueOn);
+    _renderer.skipEmptySky = on;
+    [[NSUserDefaults standardUserDefaults] setBool:on forKey:kPrefSkipSky];
+    [_renderer clearAll];   // start again, so the picture shows what the option does
+}
 
 - (void)halfDetailChanged:(NSButton *)b {
     BOOL on = (b.state == NSControlStateValueOn);
@@ -808,8 +840,13 @@ static NSString *const kPrefFastMath = @"FastMath";
     // (Environment variables override, for measuring each option from the command line.)
     BOOL half = getenv("GPUCASTER_HALF") ? atoi(getenv("GPUCASTER_HALF")) != 0 : [d boolForKey:kPrefHalfDetail];
     BOOL fast = getenv("GPUCASTER_FASTMATH") ? atoi(getenv("GPUCASTER_FASTMATH")) != 0 : [d boolForKey:kPrefFastMath];
+    BOOL sharp = getenv("GPUCASTER_SHARP") ? atoi(getenv("GPUCASTER_SHARP")) != 0 : [d boolForKey:kPrefSharpUpscale];
+    BOOL skip = getenv("GPUCASTER_SKIPSKY") ? atoi(getenv("GPUCASTER_SKIPSKY")) != 0 : [d boolForKey:kPrefSkipSky];
     _renderer.detailDivisor = half ? 2 : 1;
     _renderer.fastMath = fast;
+    _renderer.sharpUpscale = sharp;
+    _renderer.skipEmptySky = skip;
+    _renderer.edrOutput = getenv("GPUCASTER_EDR") ? atoi(getenv("GPUCASTER_EDR")) != 0 : [d boolForKey:kPrefEDR];
     [self syncExperimental];
 }
 
@@ -817,6 +854,13 @@ static NSString *const kPrefFastMath = @"FastMath";
 - (void)syncExperimental {
     _halfDetail.state = (_renderer.detailDivisor > 1) ? NSControlStateValueOn : NSControlStateValueOff;
     _fastMath.state = _renderer.fastMath ? NSControlStateValueOn : NSControlStateValueOff;
+    _sharpUpscale.state = _renderer.sharpUpscale ? NSControlStateValueOn : NSControlStateValueOff;
+    _sharpUpscale.enabled = (_renderer.detailDivisor > 1) && _renderer.sharpUpscaleAvailable;   // only means something at Half detail
+    _skipSky.state = _renderer.skipEmptySky ? NSControlStateValueOn : NSControlStateValueOff;
+    _edr.state = _renderer.edrOutput ? NSControlStateValueOn : NSControlStateValueOff;
+    _edr.enabled = _renderer.edrAvailable || _renderer.edrOutput;
+    // (MetalFX works on the ordinary picture only.)
+    if (_renderer.edrOutput) _sharpUpscale.enabled = NO;
     double rate = _renderer.passesPerSecond;
     if (rate > 0) {
         double megapixels = _renderer.imageWidth * _renderer.imageHeight * 1e-6;

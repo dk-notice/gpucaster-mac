@@ -1360,6 +1360,97 @@ static int RunSelfTest(NSString *outDir) {
         }
     }
 
+    // MetalFX upscaling (an experimental option): a half-size picture enlarged
+    // to full size must come out the right size and close to the plain enlargement.
+    if (defaultShape) {
+        setenv("GPUCASTER_SHAPE", "fractal_dodecahedron", 1);
+        Renderer *hlf = [[Renderer alloc] initWithDevice:device];
+        setenv("GPUCASTER_SHAPE", "blobs", 1);
+        hlf.autoGeomPasses = 30;
+        hlf.autoAmboPasses = 8;
+        [hlf setImageWidth:480 height:300];
+        [hlf runUntilFinished:200];
+        NSString *plain = [outDir stringByAppendingPathComponent:@"7_half_detail_plain.png"];
+        NSString *sharp = [outDir stringByAppendingPathComponent:@"7_half_detail_metalfx.png"];
+        BOOL okPlain = [hlf saveEnlargedToPNG:plain width:960 height:600 sharp:NO];
+        if (!hlf.sharpUpscaleAvailable) {
+            printf("selftest: MetalFX upscaling is not available on this graphics card; skipped\n");
+        } else {
+            BOOL okSharp = [hlf saveEnlargedToPNG:sharp width:960 height:600 sharp:YES];
+            NSBitmapImageRep *a = (NSBitmapImageRep *)[NSImageRep imageRepWithContentsOfFile:plain];
+            NSBitmapImageRep *b = (NSBitmapImageRep *)[NSImageRep imageRepWithContentsOfFile:sharp];
+            double sum = 0, lit = 0;
+            long n = 0;
+            if (okPlain && okSharp && a.pixelsWide == 960 && b.pixelsWide == 960 && b.pixelsHigh == 600) {
+                const unsigned char *p = a.bitmapData, *q = b.bitmapData;
+                const long spp = a.samplesPerPixel, spq = b.samplesPerPixel;
+                n = 960L * 600L;
+                for (long i = 0; i < n; i++) {
+                    for (int c = 0; c < 3; c++) {
+                        sum += abs(p[i * spp + c] - q[i * spq + c]);
+                        lit += q[i * spq + c];
+                    }
+                }
+            }
+            double meanDiff = n ? sum / (n * 3.0) : 999, meanLevel = n ? lit / (n * 3.0) : 0;
+            printf("selftest: MetalFX enlargement differs from plain by %.2f of 255 on average (picture level %.1f)\n", meanDiff, meanLevel);
+            // It should differ (it sharpens) but stay the same picture, and not be black.
+            if (!n || meanDiff > 12 || meanDiff < 0.01 || meanLevel < 2) { fprintf(stderr, "selftest: MetalFX upscaling gave a wrong picture\n"); failures++; }
+        }
+    }
+
+    // Skip empty sky (an experimental option): the surface found must be the
+    // same as without it, and the empty part of the picture must stay empty.
+    if (defaultShape) {
+        float depth[2] = {0, 0}, corner[2] = {0, 0};
+        simd_float4 n, am;
+        for (int skip = 0; skip < 2; skip++) {
+            setenv("GPUCASTER_SHAPE", "mandelbulb", 1);
+            Renderer *k = [[Renderer alloc] initWithDevice:device];
+            setenv("GPUCASTER_SHAPE", "blobs", 1);
+            k.autoEnabled = NO;
+            k.skipEmptySky = (skip == 1);
+            [k setImageWidth:480 height:300];
+            [k runPasses:40];
+            [k readPixelX:240 y:150 depth:&depth[skip] normal:&n ambo:&am];
+            [k readPixelX:5 y:5 depth:&corner[skip] normal:&n ambo:&am];
+        }
+        printf("selftest: skip empty sky: centre depth %.4f without, %.4f with; corner %.4f / %.4f\n", depth[0], depth[1], corner[0], corner[1]);
+        if (!(depth[0] > 0) || fabsf(depth[0] - depth[1]) > 0.01f || corner[1] != 0) {
+            fprintf(stderr, "selftest: skip empty sky changed the surface\n");
+            failures++;
+        }
+    }
+
+    // Extended brightness (an experimental option): with very bright lighting
+    // the stored picture keeps values above white instead of clipping them, the
+    // ordinary picture still clips, and a saved image is the same either way.
+    if (defaultShape) {
+        Renderer *e = [[Renderer alloc] initWithDevice:device];
+        e.autoGeomPasses = 20;
+        e.autoAmboPasses = 4;
+        e.scene->cb.kLightScale = 5;
+        e.scene->cb.kReflectivity = 0;
+        [e setImageWidth:480 height:300];
+        [e runUntilFinished:100];
+        float ordinary = [e brightestValueInPicture];
+        NSString *a = [outDir stringByAppendingPathComponent:@"8_bright_ordinary.png"];
+        NSString *b = [outDir stringByAppendingPathComponent:@"8_bright_saved_with_edr_on.png"];
+        BOOL savedA = [e saveImageToPNG:a];
+        e.edrOutput = YES;
+        float extended = [e brightestValueInPicture];
+        BOOL savedB = [e saveImageToPNG:b];
+        BOOL same = [[NSData dataWithContentsOfFile:a] isEqualToData:[NSData dataWithContentsOfFile:b]];
+        e.edrOutput = NO;
+        float back = [e brightestValueInPicture];
+        printf("selftest: brightest value %.2f ordinary, %.2f with extended brightness, %.2f after switching back; saved images %s\n",
+               ordinary, extended, back, same ? "identical" : "DIFFER");
+        if (!(ordinary <= 1.0f) || !(extended > 1.5f) || !(back <= 1.0f) || !savedA || !savedB || !same) {
+            fprintf(stderr, "selftest: extended brightness is not working\n");
+            failures++;
+        }
+    }
+
     // Every shape in the shapes folder must compile.
     if (defaultShape) {
         NSArray<NSString *> *shapes = [r availableShapes];

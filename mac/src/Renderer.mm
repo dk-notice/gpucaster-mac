@@ -1,5 +1,6 @@
 #import "Renderer.h"
 #import <ImageIO/ImageIO.h>
+#import <MetalFX/MetalFX.h>
 #include <algorithm>
 #include <random>
 #include <vector>
@@ -39,6 +40,7 @@ static const uint32_t CLEAR_GEOM = 1, CLEAR_NORM = 2, CLEAR_AMBO = 4, CLEAR_ALL 
 // Compiled shaders for each stage, and what the shape file declared.
 @interface Pipelines : NSObject
 @property (nonatomic, strong) id<MTLRenderPipelineState> geom, norm, ambo, relight, display;
+@property (nonatomic, strong) id<MTLRenderPipelineState> relightHDR, displayHDR;   // for extended brightness
 @property (nonatomic, strong) NSArray<ShapeParam *> *params;
 @property (nonatomic, copy) NSString *shapePath;   // the shape file these were compiled from
 @end
@@ -94,6 +96,10 @@ struct IntersectionSet {
     BOOL _displayDirty;            // the window needs the picture copied to it again
     int _slicesInFlight;           // work slices handed to the graphics card and not yet finished
     std::vector<CFTimeInterval> _passEnds;   // when recent passes finished, for measuring speed
+    id<MTLFXSpatialScaler> _scaler;          // MetalFX upscaler for Half detail, made when first needed
+    id<MTLTexture> _upscaled;                // its output: the picture at the window's full size
+    BOOL _viewIsEDR;                         // how the window is currently set up
+    BOOL _edrPossible;                       // the screen can show extended brightness
     CFTimeInterval _lastInput;     // when the camera, a light or a setting was last changed
     BOOL _autoActive;
     BOOL _autoFinishedMain;        // the automatic run completed the primary rays
@@ -175,6 +181,7 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         _shaderStamp = o->_shaderStamp;
         _shapeParams = o.shapeParams;
         _fastMath = o->_fastMath;
+        _skipEmptySky = o->_skipEmptySky;
         _pipelines = o->_pipelines;
         _scene = o->_scene;
         _scene.cb.g_viz_mode = 0;
@@ -350,15 +357,17 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
         NSString *fn;
         MTLPixelFormat fmt;
         bool additive;
-    } specs[5] = {
+    } specs[7] = {
         {@"fs_geom", MTLPixelFormatR32Float, false},
         {@"fs_norm", MTLPixelFormatRGBA16Snorm, false},
         {@"fs_ambo", MTLPixelFormatRGBA16Float, true},   // each pass adds to the last
         {@"fs_relight", MTLPixelFormatBGRA8Unorm, false},
         {@"fs_display", MTLPixelFormatBGRA8Unorm, false},
+        {@"fs_relight", MTLPixelFormatRGBA16Float, false},       // extended brightness
+        {@"fs_display_hdr", MTLPixelFormatRGBA16Float, false},
     };
-    id<MTLRenderPipelineState> states[5];
-    for (int i = 0; i < 5; i++) {
+    id<MTLRenderPipelineState> states[7];
+    for (int i = 0; i < 7; i++) {
         MTLRenderPipelineDescriptor *pd = [MTLRenderPipelineDescriptor new];
         pd.vertexFunction = vs;
         pd.fragmentFunction = [lib newFunctionWithName:specs[i].fn];
@@ -385,6 +394,8 @@ static const double kBytesPerPixel = 2 * (4 + 4 + 8 + 8) + 4;
     p.ambo = states[2];
     p.relight = states[3];
     p.display = states[4];
+    p.relightHDR = states[5];
+    p.displayHDR = states[6];
     p.params = params;
     p.shapePath = shapePath;
     return p;
@@ -720,7 +731,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     _height = height;
     [self initSet:&_main];
     _refl = IntersectionSet();   // made again when reflections are next used
-    _final = [self makeTarget:MTLPixelFormatBGRA8Unorm shared:YES];
+    _final = [self makeTarget:(_edrOutput ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm) shared:YES];
     _displayDirty = YES;
     [self clearAll];
 }
@@ -810,6 +821,104 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     if (detailDivisor == _detailDivisor) return;
     _detailDivisor = detailDivisor;
     _displayDirty = YES;   // the next screen refresh resizes the picture and starts it again
+}
+
+- (BOOL)edrAvailable { return _edrPossible; }
+
+- (void)setEdrOutput:(BOOL)edrOutput {
+    if (edrOutput == _edrOutput) return;
+    _edrOutput = edrOutput;
+    if (_main.initialized) {
+        // The stored picture changes format: brighter-than-white needs more than 8 bits.
+        _final = [self makeTarget:(_edrOutput ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm) shared:YES];
+        _relightWhole = YES;
+    }
+    _displayDirty = YES;
+}
+
+// Sets the window up for ordinary or extended brightness, to match the option.
+// Returns YES if it changed something (the next frame then uses the new setup).
+- (BOOL)matchView:(MTKView *)view {
+    NSScreen *screen = view.window.screen;
+    _edrPossible = screen && screen.maximumPotentialExtendedDynamicRangeColorComponentValue > 1.05;
+    const BOOL want = _edrOutput && _edrPossible;
+    if (want == _viewIsEDR) return NO;
+    _viewIsEDR = want;
+    CAMetalLayer *layer = (CAMetalLayer *)view.layer;
+    view.colorPixelFormat = want ? MTLPixelFormatRGBA16Float : MTLPixelFormatBGRA8Unorm;
+    layer.wantsExtendedDynamicRangeContent = want;
+    if (want) {
+        CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceExtendedLinearDisplayP3);
+        layer.colorspace = cs;
+        CGColorSpaceRelease(cs);
+    } else {
+        layer.colorspace = nil;
+    }
+    _displayDirty = YES;
+    return YES;
+}
+
+- (float)brightestValueInPicture {
+    if (!_final) return 0;
+    id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    _relightWhole = YES;
+    [self stepInto:cb maxTiles:0];
+    [cb commit];
+    [cb waitUntilCompleted];
+    const int w = (int)_final.width, h = (int)_final.height;
+    float best = 0;
+    if (_final.pixelFormat == MTLPixelFormatRGBA16Float) {
+        std::vector<_Float16> px((size_t)w * h * 4);
+        [_final getBytes:px.data() bytesPerRow:(NSUInteger)w * 8 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+        for (size_t i = 0; i < px.size(); i += 4) best = MAX(best, MAX((float)px[i], MAX((float)px[i + 1], (float)px[i + 2])));
+    } else {
+        std::vector<uint8_t> px((size_t)w * h * 4);
+        [_final getBytes:px.data() bytesPerRow:(NSUInteger)w * 4 fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
+        for (size_t i = 0; i < px.size(); i += 4) best = MAX(best, MAX(px[i], MAX(px[i + 1], px[i + 2])) / 255.0f);
+    }
+    return best;
+}
+
+- (BOOL)sharpUpscaleAvailable { return [MTLFXSpatialScalerDescriptor supportsDevice:_device]; }
+
+- (void)setSharpUpscale:(BOOL)sharpUpscale {
+    if (sharpUpscale == _sharpUpscale) return;
+    _sharpUpscale = sharpUpscale;
+    _displayDirty = YES;
+}
+
+// Enlarges the finished picture to 'width' x 'height' with MetalFX and
+// returns the result, or nil if that isn't possible (the caller then enlarges
+// it the plain way).  The upscaler is rebuilt whenever either size changes.
+- (id<MTLTexture>)upscaleInto:(id<MTLCommandBuffer>)cb width:(int)width height:(int)height {
+    if (!_final || ![self sharpUpscaleAvailable] || width <= _width || height <= _height) return nil;
+    if (_final.pixelFormat != MTLPixelFormatBGRA8Unorm) return nil;   // not while showing extended brightness
+    if (!_scaler || (int)_scaler.inputWidth != _width || (int)_scaler.inputHeight != _height ||
+        (int)_scaler.outputWidth != width || (int)_scaler.outputHeight != height) {
+        MTLFXSpatialScalerDescriptor *d = [MTLFXSpatialScalerDescriptor new];
+        d.inputWidth = (NSUInteger)_width;
+        d.inputHeight = (NSUInteger)_height;
+        d.outputWidth = (NSUInteger)width;
+        d.outputHeight = (NSUInteger)height;
+        d.colorTextureFormat = MTLPixelFormatBGRA8Unorm;
+        d.outputTextureFormat = MTLPixelFormatBGRA8Unorm;
+        d.colorProcessingMode = MTLFXSpatialScalerColorProcessingModePerceptual;   // the picture is already display-ready
+        _scaler = [d newSpatialScalerWithDevice:_device];
+        _upscaled = nil;
+        if (!_scaler) return nil;
+        MTLTextureDescriptor *td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:width height:height mipmapped:NO];
+        td.usage = _scaler.outputTextureUsage | MTLTextureUsageShaderRead;
+        td.storageMode = _device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+        _upscaled = [_device newTextureWithDescriptor:td];
+    }
+    if (!_upscaled) return nil;
+    _scaler.colorTexture = _final;
+    _scaler.outputTexture = _upscaled;
+    _scaler.inputContentWidth = (NSUInteger)_width;
+    _scaler.inputContentHeight = (NSUInteger)_height;
+    [_scaler encodeToCommandBuffer:cb];
+    return _upscaled;
 }
 
 - (void)setSoloLight:(int)soloLight {
@@ -1140,6 +1249,8 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
                                      (float)[self tilesAcross], (float)[self tilesDown]);
     u.g_main_ambo_tiles_done = [self amboTilesDone:&_main extra:(s == &_main ? tilesThisFrame : 0)];
     u.g_refl_ambo_tiles_done = [self amboTilesDone:&_refl extra:(s == &_refl ? tilesThisFrame : 0)];
+    u.g_skip_empty_after = _skipEmptySky ? 16 : 0;
+    u.g_hdr_output = 0;   // (switched on only for the picture shown in the window)
 }
 
 // Does one frame's worth of work: up to 'maxTiles' tiles of the current
@@ -1165,6 +1276,8 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     // Settings for this frame.
     [self fillFrameUniforms:n];
     Uniforms u = _scene.cb;
+    const BOOL hdr = (_final.pixelFormat == MTLPixelFormatRGBA16Float);
+    u.g_hdr_output = hdr ? 1 : 0;
     if (_soloLight >= 0) {
         // Showing one light alone: switch the others off in this frame's copy only.
         for (int i = 0; i < MAX_LIGHTS; i++) {
@@ -1211,7 +1324,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
         rp.colorAttachments[0].loadAction = MTLLoadActionLoad;
         rp.colorAttachments[0].storeAction = MTLStoreActionStore;
         id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
-        [enc setRenderPipelineState:_pipelines.relight];
+        [enc setRenderPipelineState:hdr ? _pipelines.relightHDR : _pipelines.relight];
         [self bindScene:enc target:_final forRelight:YES uniforms:ubuf tiles:tbuf];
         if (_relightWhole) {
             [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
@@ -1294,6 +1407,7 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     CGSize size = view.drawableSize;
     [self setImageWidth:(int)size.width / _detailDivisor height:(int)size.height / _detailDivisor];
 
+    if ([self matchView:view]) return;   // the window was just switched between ordinary and extended brightness
     [self pumpWork];
 
     // When the picture on screen is up to date, do nothing at all, so an idle
@@ -1307,14 +1421,29 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     // Copy the picture to the window.  This waits its turn behind the work
     // already handed to the graphics card, so it shows the latest results.
     id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    // At Half detail the picture is smaller than the window: enlarge it with
+    // MetalFX if that is switched on, otherwise the copy below stretches it.
+    id<MTLTexture> picture = _final;
+    if (_sharpUpscale && _detailDivisor > 1) {
+        id<MTLTexture> sharp = [self upscaleInto:cb width:(int)size.width height:(int)size.height];
+        if (sharp) picture = sharp;
+    }
     id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:pass];
-    if (_pipelines && _final) {
+    if (_pipelines && picture) {
         simd_float4 viewSize = simd_make_float4((float)size.width, (float)size.height,
                                                 1.0f / (float)size.width, 1.0f / (float)size.height);
-        [enc setRenderPipelineState:_pipelines.display];
-        [enc setFragmentTexture:_final atIndex:0];
+        [enc setFragmentTexture:picture atIndex:0];
         [enc setFragmentSamplerState:_linearClamp atIndex:0];
         [enc setFragmentBytes:&viewSize length:sizeof(viewSize) atIndex:0];
+        if (_viewIsEDR) {
+            // How much brighter than white the display can go at this moment.
+            float headroom = (float)MAX(1.0, view.window.screen.maximumExtendedDynamicRangeColorComponentValue);
+            simd_float4 hdrInfo = simd_make_float4(headroom, 0, 0, 0);
+            [enc setRenderPipelineState:_pipelines.displayHDR];
+            [enc setFragmentBytes:&hdrInfo length:sizeof(hdrInfo) atIndex:1];
+        } else {
+            [enc setRenderPipelineState:_pipelines.display];
+        }
         [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
     }
     [enc endEncoding];
@@ -1429,33 +1558,18 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     return images;
 }
 
-- (BOOL)saveImageToPNG:(NSString *)path {
-    if (!_final || !_pipelines) return NO;
-
-    // Relight the whole picture so it is up to date, and wait for it.
-    _relightWhole = YES;
-    id<MTLCommandBuffer> cb = [_queue commandBuffer];
-    [self stepInto:cb maxTiles:0];
-    if (_final.storageMode == MTLStorageModeManaged) {
-        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
-        [blit synchronizeResource:_final];
-        [blit endEncoding];
-    }
-    [cb commit];
-    [cb waitUntilCompleted];
-
-    const size_t rowBytes = (size_t)_width * 4;
-    std::vector<uint8_t> pixels(rowBytes * (size_t)_height);
-    [_final getBytes:pixels.data() bytesPerRow:rowBytes fromRegion:MTLRegionMake2D(0, 0, _width, _height) mipmapLevel:0];
-
+static BOOL WriteBGRA8TextureToPNG(id<MTLTexture> tex, NSString *path) {
+    const int w = (int)tex.width, h = (int)tex.height;
+    const size_t rowBytes = (size_t)w * 4;
+    std::vector<uint8_t> pixels(rowBytes * (size_t)h);
+    [tex getBytes:pixels.data() bytesPerRow:rowBytes fromRegion:MTLRegionMake2D(0, 0, w, h) mipmapLevel:0];
     CGColorSpaceRef cs = CGColorSpaceCreateWithName(kCGColorSpaceSRGB);
-    CGContextRef ctx = CGBitmapContextCreate(pixels.data(), _width, _height, 8, rowBytes, cs,
-                                             kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
+    CGContextRef ctx = CGBitmapContextCreate(pixels.data(), w, h, 8, rowBytes, cs, kCGBitmapByteOrder32Little | kCGImageAlphaNoneSkipFirst);
     CGImageRef image = ctx ? CGBitmapContextCreateImage(ctx) : NULL;
     BOOL ok = NO;
     if (image) {
-        CGImageDestinationRef dest = CGImageDestinationCreateWithURL(
-            (__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL);
+        CGImageDestinationRef dest =
+            CGImageDestinationCreateWithURL((__bridge CFURLRef)[NSURL fileURLWithPath:path], CFSTR("public.png"), 1, NULL);
         if (dest) {
             CGImageDestinationAddImage(dest, image, NULL);
             ok = CGImageDestinationFinalize(dest);
@@ -1466,6 +1580,85 @@ static NSArray<NSString *> *ShapesIn(NSString *dir) {
     if (ctx) CGContextRelease(ctx);
     CGColorSpaceRelease(cs);
     return ok;
+}
+
+- (BOOL)saveEnlargedToPNG:(NSString *)path width:(int)width height:(int)height sharp:(BOOL)sharp {
+    if (!_final || !_pipelines) return NO;
+    _relightWhole = YES;
+    id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    [self stepInto:cb maxTiles:0];
+    id<MTLTexture> picture = _final;
+    if (sharp) {
+        picture = [self upscaleInto:cb width:width height:height];
+        if (!picture) return NO;
+    }
+    // Draw it into a texture of the window's size, exactly as the window would.
+    MTLTextureDescriptor *td =
+        [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:width height:height mipmapped:NO];
+    td.usage = MTLTextureUsageRenderTarget;
+    td.storageMode = _device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+    id<MTLTexture> target = [_device newTextureWithDescriptor:td];
+    MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
+    rp.colorAttachments[0].texture = target;
+    rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+    rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+    id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+    simd_float4 viewSize = simd_make_float4((float)width, (float)height, 1.0f / width, 1.0f / height);
+    [enc setRenderPipelineState:_pipelines.display];
+    [enc setFragmentTexture:picture atIndex:0];
+    [enc setFragmentSamplerState:_linearClamp atIndex:0];
+    [enc setFragmentBytes:&viewSize length:sizeof(viewSize) atIndex:0];
+    [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+    [enc endEncoding];
+    if (target.storageMode == MTLStorageModeManaged) {
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit synchronizeResource:target];
+        [blit endEncoding];
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    return WriteBGRA8TextureToPNG(target, path);
+}
+
+- (BOOL)saveImageToPNG:(NSString *)path {
+    if (!_final || !_pipelines) return NO;
+
+    // Relight the whole picture so it is up to date, and wait for it.
+    _relightWhole = YES;
+    id<MTLCommandBuffer> cb = [_queue commandBuffer];
+    [self stepInto:cb maxTiles:0];
+
+    id<MTLTexture> toSave = _final;
+    if (_final.pixelFormat != MTLPixelFormatBGRA8Unorm) {
+        // The window is showing extended brightness, which a PNG can't hold:
+        // light an ordinary copy of the picture for saving.
+        [self fillFrameUniforms:0];
+        Uniforms u = _scene.cb;
+        id<MTLBuffer> ubuf = [_device newBufferWithBytes:&u length:sizeof(u) options:MTLResourceStorageModeShared];
+        id<MTLBuffer> tbuf = [_device newBufferWithLength:kTileStride options:MTLResourceStorageModeShared];
+        MTLTextureDescriptor *td =
+            [MTLTextureDescriptor texture2DDescriptorWithPixelFormat:MTLPixelFormatBGRA8Unorm width:_width height:_height mipmapped:NO];
+        td.usage = MTLTextureUsageRenderTarget;
+        td.storageMode = _device.hasUnifiedMemory ? MTLStorageModeShared : MTLStorageModeManaged;
+        toSave = [_device newTextureWithDescriptor:td];
+        MTLRenderPassDescriptor *rp = [MTLRenderPassDescriptor new];
+        rp.colorAttachments[0].texture = toSave;
+        rp.colorAttachments[0].loadAction = MTLLoadActionDontCare;
+        rp.colorAttachments[0].storeAction = MTLStoreActionStore;
+        id<MTLRenderCommandEncoder> enc = [cb renderCommandEncoderWithDescriptor:rp];
+        [enc setRenderPipelineState:_pipelines.relight];
+        [self bindScene:enc target:toSave forRelight:YES uniforms:ubuf tiles:tbuf];
+        [enc drawPrimitives:MTLPrimitiveTypeTriangle vertexStart:0 vertexCount:3];
+        [enc endEncoding];
+    }
+    if (toSave.storageMode == MTLStorageModeManaged) {
+        id<MTLBlitCommandEncoder> blit = [cb blitCommandEncoder];
+        [blit synchronizeResource:toSave];
+        [blit endEncoding];
+    }
+    [cb commit];
+    [cb waitUntilCompleted];
+    return WriteBGRA8TextureToPNG(toSave, path);
 }
 
 @end

@@ -43,6 +43,8 @@
 #define g_tile_info         u.g_tile_info
 #define g_main_ambo_tiles_done u.g_main_ambo_tiles_done
 #define g_refl_ambo_tiles_done u.g_refl_ambo_tiles_done
+#define g_skip_empty_after   u.g_skip_empty_after
+#define g_hdr_output         u.g_hdr_output
 
 #define g_dialog_coeffs u.g_dialog_coeffs
 #define g_c0 g_dialog_coeffs[0]

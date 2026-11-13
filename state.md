@@ -26,9 +26,12 @@ Last updated: 2026-11-12
   also writes the shape beside it as `name.metal`; opening a scene picks that up.
 - An idle app uses no graphics card time.
 - Experimental section (after 1.1, collapsed at the bottom of the sidebar): a live
-  speed reading in passes per second, a Half detail toggle (render at half the
-  window's resolution and enlarge) and a Fast math toggle (relaxed shader
-  arithmetic). Both are app preferences, off by default, not saved in scenes.
+  speed reading in passes per second and five toggles, all app preferences, off by
+  default, not saved in scenes: Half detail (render at half the window's resolution
+  and enlarge), Sharpen Half detail with MetalFX (Apple's spatial upscaler), Skip
+  empty sky (stop testing empty pixels after 16 geometry passes), Extended
+  brightness (show values above white on EDR displays) and Fast math (relaxed
+  shader arithmetic).
 - Lights section (new in 1.1): each light is listed by where it shines from as seen
   from the camera, with a colour swatch and an on/off tick. A direction ball shows
   the lights as dots (solid = lights the front, hollow = from behind); dragging a dot
@@ -71,6 +74,9 @@ there using the shaders inside the app; its signature verifies and its window op
 
 ## Not yet verified (needs a person at the window)
 
+- The Experimental toggles under a mouse, and above all how Extended brightness and
+  MetalFX sharpening look on the real display.
+
 - The light direction ball: dragging dots, double-click to flip, clicking the ball
   to move the selected light. Light rows: selecting, on/off ticks. The hold-down
   "see this light alone" button. Only their layout and the maths behind them are
@@ -102,8 +108,8 @@ and an Apple silicon Mac.
 Testing aids (environment variables): `GPUCASTER_SHAPE=name` or a full path chooses
 the shape; `GPUCASTER_UISHOT=path` saves a picture of the window's controls after 4
 seconds and quits (`GPUCASTER_UISHOT_BOTTOM=1` first opens the collapsed groups and
-scrolls to them); `GPUCASTER_HALF=1` / `GPUCASTER_FASTMATH=1` switch the experimental
-options on for one run; `--render ... --fast-math` renders with fast math;
+scrolls to them); `GPUCASTER_HALF`, `GPUCASTER_SHARP`, `GPUCASTER_SKIPSKY`, `GPUCASTER_EDR` and
+`GPUCASTER_FASTMATH` (each 1 or 0) set the experimental options for one run; `--render ... --fast-math` renders with fast math;
 `GPUCASTER_BENCH=1` measures geometry passes per second in the
 live window and quits; a diagnostic log of mouse presses and slider changes is written
 to `~/Library/Logs/Gpucaster/debug.log` whenever the app runs from the source folder
@@ -207,8 +213,9 @@ direction ball, brightness slider and solo; colour picker fix; about twice the
 rendering speed). New work continues on `main`; later milestones get their own
 tags. Ideas not yet started:
 
-1. More experimental toggles, in the order agreed: MetalFX upscaling (on top of
-   Half detail), skipping empty sky, extended brightness (EDR).
+1. Possible bigger changes discussed but not started: running the stages as compute
+   shaders (a replacement engine, not a toggle), and compiling the shape separately
+   from the other shader code so switching shapes is faster.
 1. Save the lighting history between launches.
 2. A zoom lens for checking detail (the original's Z key).
 3. Notarisation, if an Apple developer account is ever available.
@@ -242,6 +249,20 @@ tags. Ideas not yet started:
   16.7 / 18.0 / 68.7 / 72.0; Mandelbox 95 / 293 / 386 / 1138. Half detail is about
   4.1x everywhere. Fast math is about 3x for the Mandelbox and Blobs and under 10%
   for the fractal dodecahedron and Mandelbulb.
+- Skip empty sky gained only 3% (Mandelbulb), 8% (fractal dodecahedron) and 19%
+  (sphere on plane) in the benchmark, because those views have little empty area.
+  It skips a pixel only if it and its four neighbours have found nothing, so
+  surfaces still spread from their edges; the test confirms the surface is unchanged.
+- MetalFX: on the fractal dodecahedron the enlarged picture has visibly crisper
+  edges than plain enlargement, and fine noisy detail looks somewhat harsher
+  (compared by eye from the self-test's `7_half_detail_*.png`). Its cost is
+  negligible (382 vs 386 passes per second on the Mandelbox at half detail).
+- Extended brightness: the stored picture becomes 16-bit float and keeps values
+  above white (test: 29.8 with brightness 5, against 1.0 clipped); the window
+  switches to an extended-range layer and converts with a 2.2 gamma, limited to the
+  display's current headroom. Saved images are identical with it on or off. How it
+  LOOKS on the display has not been seen by the assistant at all; MetalFX is
+  switched off while it is on.
 - Fast math and picture accuracy: rendering Mandelbox, fractal dodecahedron,
   Mandelbulb and Blobs both ways at 800 x 500, the mean difference was at most 0.18
   out of 255 per colour channel and at most 0.24% of pixels differed strongly. So
