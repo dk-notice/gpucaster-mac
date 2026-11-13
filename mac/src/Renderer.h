@@ -39,8 +39,13 @@ extern NSString *const kVizModeNames[kNumVizModes];
 - (void)setVizMode:(int)mode;
 
 // When on, stages advance by themselves: geometry, normals, then ambient
-// occlusion, and stop when the picture is finished.
+// occlusion - and the same again for reflected rays if the surface is
+// reflective - and stop when the picture is finished.
 @property (nonatomic) BOOL autoEnabled;
+@property (nonatomic) int autoGeomPasses;     // geometry passes in an automatic run
+@property (nonatomic) int autoAmboPasses;     // ambient occlusion passes in an automatic run
+@property (nonatomic) BOOL paused;            // hold the work without losing it
+- (void)refineMore;                           // more ambient passes on a finished picture
 
 // --- Mouse ------------------------------------------------------------------
 // What dragging moves: -1 = camera, 0..MAX_LIGHTS-1 = that light, 9 = all lights.
@@ -74,6 +79,8 @@ extern NSString *const kVizModeNames[kNumVizModes];
 @property (nonatomic, readonly) GenMode stage;
 @property (nonatomic, readonly) BOOL onReflection;
 @property (nonatomic, readonly) BOOL autoRunning;
+@property (nonatomic, readonly) BOOL finished;      // nothing left to do
+@property (nonatomic, readonly) double progress;    // 0..1 through an automatic run; -1 when run by hand
 @property (nonatomic, readonly) int geomPasses;
 @property (nonatomic, readonly) int amboPasses;
 @property (nonatomic, readonly) BOOL normalsReady;
@@ -87,6 +94,7 @@ extern NSString *const kVizModeNames[kNumVizModes];
 // --- Off-screen use (self-test) ---------------------------------------------
 - (void)setImageWidth:(int)width height:(int)height;
 - (void)runPasses:(int)passes;        // runs whole passes of the current stage and waits
+- (BOOL)runUntilFinished:(int)maxPasses;   // runs an automatic run to the end; NO if it did not finish
 // Reads back the stored data for one pixel of the primary rays (for checking results).
 - (void)readPixelX:(int)x y:(int)y depth:(float *)depth normal:(simd_float4 *)normal ambo:(simd_float4 *)ambo;
 

@@ -63,9 +63,8 @@
     Sidebar *_sidebar;
     NSPopUpButton *_shapePopup;
     NSArray<NSString *> *_shapePopupPaths;   // what the pop-up currently lists
-    NSSegmentedControl *_stageControl;
-    NSButton *_autoCheck;
-    NSButton *_reflCheck;
+    NSButton *_runButton;           // Pause / Resume / Refine More
+    NSProgressIndicator *_progress;
     NSTextField *_status;
     NSTimer *_timer;
     NSString *_shownError;
@@ -179,21 +178,18 @@
     _shapePopup.action = @selector(shapePicked:);
     _shapePopup.toolTip = @"The shape being drawn (a file in the shapes folder)";
 
-    _stageControl = [NSSegmentedControl segmentedControlWithLabels:@[@"Geometry", @"Normals", @"Ambient", @"Stop"]
-                                                      trackingMode:NSSegmentSwitchTrackingSelectOne
-                                                            target:self
-                                                            action:@selector(stageClicked:)];
-    [_stageControl setToolTip:@"Geometry (G)" forSegment:0];
-    [_stageControl setToolTip:@"Normals (N)" forSegment:1];
-    [_stageControl setToolTip:@"Ambient occlusion (A)" forSegment:2];
-    [_stageControl setToolTip:@"Stop after the current pass (Esc)" forSegment:3];
-
-    _autoCheck = [NSButton checkboxWithTitle:@"Auto" target:self action:@selector(toggleAuto:)];
-    _autoCheck.toolTip = @"Run the stages in order and stop when the picture is finished";
-    _reflCheck = [NSButton checkboxWithTitle:@"Reflections" target:self action:@selector(toggleReflection:)];
-    _reflCheck.toolTip = @"Work on reflected rays instead of primary rays (F)";
+    _runButton = [NSButton buttonWithTitle:@"Refine More" target:self action:@selector(runButtonClicked:)];
+    [_runButton.widthAnchor constraintEqualToConstant:104].active = YES;   // fits the longest title, so nothing jumps
     NSButton *clear = [NSButton buttonWithTitle:@"Restart" target:self action:@selector(clearScene:)];
     clear.toolTip = @"Throw away the picture and start again (C)";
+
+    _progress = [NSProgressIndicator new];
+    _progress.style = NSProgressIndicatorStyleBar;
+    _progress.indeterminate = NO;
+    _progress.minValue = 0;
+    _progress.maxValue = 1;
+    _progress.controlSize = NSControlSizeSmall;
+    [_progress.widthAnchor constraintEqualToConstant:140].active = YES;
 
     _status = [NSTextField labelWithString:@""];
     _status.font = [NSFont monospacedDigitSystemFontOfSize:11 weight:NSFontWeightRegular];
@@ -202,7 +198,7 @@
     [_status setContentCompressionResistancePriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
     [_status setContentHuggingPriority:1 forOrientation:NSLayoutConstraintOrientationHorizontal];
 
-    NSStackView *bar = [NSStackView stackViewWithViews:@[_shapePopup, _stageControl, _autoCheck, _reflCheck, clear, _status]];
+    NSStackView *bar = [NSStackView stackViewWithViews:@[_shapePopup, _runButton, clear, _progress, _status]];
     bar.orientation = NSUserInterfaceLayoutOrientationHorizontal;
     bar.spacing = 12;
     bar.edgeInsets = NSEdgeInsetsMake(6, 12, 6, 12);
@@ -232,11 +228,22 @@
     [_renderer reloadShadersIfFilesChanged];
     [self refreshShapePopup];
     _status.stringValue = [_renderer statusText];
-    GenMode stage = _renderer.stage;
-    _stageControl.selectedSegment = (stage == GenNone) ? 3 : (NSInteger)stage;
-    [_stageControl setEnabled:(_renderer.normalsReady || stage == GenNormals) forSegment:2];
-    _autoCheck.state = _renderer.autoEnabled ? NSControlStateValueOn : NSControlStateValueOff;
-    _reflCheck.state = _renderer.onReflection ? NSControlStateValueOn : NSControlStateValueOff;
+
+    // One button: pause while working, resume when paused, refine when finished.
+    BOOL finished = _renderer.finished;
+    if (_renderer.paused) {
+        _runButton.title = @"Resume";
+        _runButton.toolTip = @"Carry on from where it paused (Space)";
+    } else if (finished) {
+        _runButton.title = @"Refine More";
+        _runButton.toolTip = @"Add more shading passes for a smoother picture";
+    } else {
+        _runButton.title = @"Pause";
+        _runButton.toolTip = @"Hold the work without losing it (Space)";
+    }
+    double p = _renderer.progress;
+    _progress.hidden = (p < 0 || finished);
+    if (p >= 0) _progress.doubleValue = p;
 }
 
 - (void)sidebarRefresh { [_sidebar refresh]; }
@@ -287,17 +294,19 @@ static NSString *FunctionKey(unichar c) { return [NSString stringWithCharacters:
 
     // Render
     NSMenu *render = [[NSMenu alloc] initWithTitle:@"Render"];
+    [self add:@"Pause" to:render action:@selector(togglePause:) key:@" " mods:none];
+    [self add:@"Refine More" to:render action:@selector(refineMore:) key:@"m" mods:none];
+    [self add:@"Restart" to:render action:@selector(clearScene:) key:@"c" mods:none];
+    [self add:@"New Random Scene" to:render action:@selector(randomScene:) key:@"r" mods:none];
+    [self add:@"Reset Camera" to:render action:@selector(resetCamera:) key:@"" mods:none];
+    [render addItem:[NSMenuItem separatorItem]];
+    [self add:@"Run Stages Automatically" to:render action:@selector(toggleAuto:) key:@"p" mods:none];
+    [[render addItemWithTitle:@"Run a stage by hand:" action:nil keyEquivalent:@""] setEnabled:NO];
     [self add:@"Geometry" to:render action:@selector(stageMenu:) key:@"g" mods:none].tag = GenGeom;
     [self add:@"Normals" to:render action:@selector(stageMenu:) key:@"n" mods:none].tag = GenNormals;
     [self add:@"Ambient Occlusion" to:render action:@selector(stageMenu:) key:@"a" mods:none].tag = GenAmbo;
     [self add:@"Stop After This Pass" to:render action:@selector(stageMenu:) key:@"\e" mods:none].tag = GenNone;
-    [render addItem:[NSMenuItem separatorItem]];
-    [self add:@"Run Stages Automatically" to:render action:@selector(toggleAuto:) key:@"p" mods:none];
     [self add:@"Work on Reflections" to:render action:@selector(toggleReflection:) key:@"f" mods:none];
-    [render addItem:[NSMenuItem separatorItem]];
-    [self add:@"Restart" to:render action:@selector(clearScene:) key:@"c" mods:none];
-    [self add:@"New Random Scene" to:render action:@selector(randomScene:) key:@"r" mods:none];
-    [self add:@"Reset Camera" to:render action:@selector(resetCamera:) key:@"" mods:none];
     [render addItem:[NSMenuItem separatorItem]];
     [self add:@"Reload Shaders" to:render action:@selector(reloadShaders:) key:@"r" mods:cmd];
     [self add:@"Reload Shaders" to:render action:@selector(reloadShaders:) key:FunctionKey(NSF5FunctionKey) mods:none].alternate = NO;
@@ -381,6 +390,11 @@ static const NSInteger kShapeItemTag = 1000;
         if (item.tag == GenAmbo) return _renderer.normalsReady || _renderer.stage == GenNormals;
     } else if (a == @selector(toggleAuto:)) {
         on = _renderer.autoEnabled;
+    } else if (a == @selector(togglePause:)) {
+        item.title = _renderer.paused ? @"Resume" : @"Pause";
+        return _renderer.paused || !_renderer.finished;
+    } else if (a == @selector(refineMore:)) {
+        return _renderer.finished;
     } else if (a == @selector(toggleReflection:)) {
         on = _renderer.onReflection;
     } else if (a == @selector(mouseTargetMenu:)) {
@@ -477,10 +491,14 @@ static const NSInteger kShapeItemTag = 1000;
 
 #pragma mark - Render actions
 
-- (void)stageClicked:(NSSegmentedControl *)c {
-    [_renderer setStage:(c.selectedSegment == 3) ? GenNone : (GenMode)c.selectedSegment];
+- (void)runButtonClicked:(id)sender {
+    if (_renderer.paused) _renderer.paused = NO;
+    else if (_renderer.finished) [_renderer refineMore];
+    else _renderer.paused = YES;
     [self tick];
 }
+- (void)togglePause:(id)sender { _renderer.paused = !_renderer.paused; [self tick]; }
+- (void)refineMore:(id)sender { _renderer.paused = NO; [_renderer refineMore]; [self tick]; }
 - (void)stageMenu:(NSMenuItem *)item { [_renderer setStage:(GenMode)item.tag]; [self tick]; }
 - (void)toggleAuto:(id)sender { _renderer.autoEnabled = !_renderer.autoEnabled; [self tick]; }
 - (void)toggleReflection:(id)sender { [_renderer toggleReflection]; [self tick]; }
@@ -538,10 +556,13 @@ static const NSInteger kShapeItemTag = 1000;
          "Control-drag or Option-drag: roll the camera\n"
          "Right-drag, scroll or pinch: move forwards and backwards\n"
          "(Often the camera starts inside the surface; move backwards to see it.)\n\n"
-         "STAGES\n"
-         "G geometry, N normals, A ambient occlusion, Esc stop\n"
-         "P run the stages automatically, F work on reflections\n"
-         "C restart, R new random scene\n\n"
+         "THE PICTURE\n"
+         "It builds itself: geometry, then normals, then shading, and reflections\n"
+         "if the surface is reflective.\n"
+         "Space pause or resume, M refine more, C restart, R new random scene\n\n"
+         "BY HAND (as in the Windows version)\n"
+         "G geometry, N normals, A ambient occlusion, Esc stop, F reflections,\n"
+         "P turn the automatic run on or off\n\n"
          "LIGHTING\n"
          "L random lighting, = brighter, - darker\n"
          "0 mouse moves camera, 1-5 mouse moves that light, 9 all lights\n\n"
@@ -692,6 +713,33 @@ static int RunSelfTest(NSString *outDir) {
         save([NSString stringWithFormat:@"view_%d.png", mode]);
     }
     [r setVizMode:0];
+
+    // An automatic run must go through every stage by itself, including the
+    // reflection stages when the surface is reflective, and then stop.
+    {
+        Renderer *a = [[Renderer alloc] initWithDevice:device];
+        a.autoGeomPasses = 12;
+        a.autoAmboPasses = 4;
+        a.scene->cb.kReflectivity = 0.5f;
+        [a setImageWidth:480 height:300];
+        BOOL done = [a runUntilFinished:200];
+        double p = a.progress;
+        [a saveImageToPNG:[outDir stringByAppendingPathComponent:@"4_auto_with_reflections.png"]];
+        printf("selftest: automatic run %s (geometry %d, ambient %d, on %s rays, progress %.2f)\n", done ? "finished" : "DID NOT FINISH",
+               a.geomPasses, a.amboPasses, a.onReflection ? "reflection" : "primary", p);
+        if (!done || a.onReflection || a.geomPasses != 12 || a.amboPasses != 4 || p != 1.0) failures++;
+        // Without reflectivity it must not spend time on reflections: 12 + 1 + 4 passes.
+        Renderer *b = [[Renderer alloc] initWithDevice:device];
+        b.autoGeomPasses = 12;
+        b.autoAmboPasses = 4;
+        b.scene->cb.kReflectivity = 0;
+        [b setImageWidth:480 height:300];
+        [b runPasses:17];
+        if (!b.finished) { fprintf(stderr, "selftest: non-reflective automatic run did not finish in 17 passes\n"); failures++; }
+        [b refineMore];
+        [b runUntilFinished:50];
+        if (b.amboPasses != 8) { fprintf(stderr, "selftest: refine more gave %d ambient passes, expected 8\n", b.amboPasses); failures++; }
+    }
 
     // Every shape in the shapes folder must compile.
     if (defaultShape) {

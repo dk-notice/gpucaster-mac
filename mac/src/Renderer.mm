@@ -16,8 +16,6 @@ static NSString *const kShapeDefaultsKey = @"ShapePath";
 static const int kTileEdge = 128;             // pixels; the app decides how many tiles to draw per frame
 static const double kTargetGpuSeconds = 0.010;   // GPU time to spend per frame, to keep the app responsive
 static const int kTileStride = 1280;          // bytes between tiles in the per-tile buffer (>= sizeof(TileUniforms))
-static const int kAutoGeomPasses = 40;
-static const int kAutoAmboPasses = 16;
 
 static const uint32_t CLEAR_GEOM = 1, CLEAR_NORM = 2, CLEAR_AMBO = 4, CLEAR_ALL = 0xFFFFFFFF;
 
@@ -74,6 +72,8 @@ struct IntersectionSet {
     BOOL _relightWhole;
     BOOL _displayDirty;            // the window needs the picture copied to it again
     BOOL _autoActive;
+    BOOL _autoFinishedMain;        // the automatic run completed the primary rays
+    int _amboTarget;               // ambient passes to reach for the primary rays (grows with "refine more")
     BOOL _reloadPending;
     double _tilesPerFrame;
     NSTimeInterval _shaderStamp;
@@ -88,6 +88,9 @@ struct IntersectionSet {
         _mouseTarget = -1;
         _autoEnabled = YES;
         _autoActive = YES;
+        _autoGeomPasses = 40;
+        _autoAmboPasses = 16;
+        _amboTarget = _autoAmboPasses;
         _tilesPerFrame = 4;
         _shaderDir = [Renderer findShaderDir];
         _shapePath = [self initialShape];
@@ -489,18 +492,48 @@ struct IntersectionSet {
     _refl.next = GenGeom;
     _relightWhole = YES;
     _autoActive = _autoEnabled;
+    _autoFinishedMain = NO;
+    _amboTarget = _autoAmboPasses;
 }
 
-- (void)relight { _relightWhole = YES; }
+- (void)relight {
+    _relightWhole = YES;
+    [self startReflectionsIfWanted];
+}
+
+// Reflections only matter when the surface is reflective.
+- (BOOL)wantsReflections { return _scene.cb.kReflectivity > 0.001f; }
+
+- (BOOL)reflectionsComplete {
+    return _refl.initialized && _refl.gen == GenNone && _refl.normals_ready && _refl.ambo_pass >= _autoAmboPasses;
+}
+
+// If the automatic run finished without reflections and the surface has since
+// been made reflective, carry on and compute them.
+- (void)startReflectionsIfWanted {
+    if (!_autoEnabled || _autoActive || !_autoFinishedMain || _cur != &_main || _main.gen != GenNone) return;
+    if (![self wantsReflections] || [self reflectionsComplete]) return;
+    _autoActive = YES;
+    [self autoBeginReflections];
+}
+
+- (void)autoBeginReflections {
+    if (!_refl.initialized) [self initSet:&_refl];
+    _refl.clear_flags = CLEAR_ALL;
+    _refl.next = GenGeom;
+    _cur = &_refl;
+}
 
 - (void)setStage:(GenMode)mode {
     _autoActive = NO;
+    _autoFinishedMain = NO;   // the user has taken over
     if (mode == GenAmbo && !(_cur->normals_ready || _cur->gen == GenNormals)) return;   // needs normals first
     _cur->next = mode;
 }
 
 - (void)toggleReflection {
     _autoActive = NO;
+    _autoFinishedMain = NO;
     if (_cur == &_main) {
         if (!_refl.initialized) [self initSet:&_refl];
         _cur = &_refl;
@@ -528,12 +561,36 @@ struct IntersectionSet {
 
 - (void)setAutoEnabled:(BOOL)autoEnabled {
     _autoEnabled = autoEnabled;
-    _autoActive = autoEnabled && _cur == &_main && _main.gen != GenNone;
-    if (autoEnabled && _main.gen == GenNone && _cur == &_main && _main.ambo_pass < kAutoAmboPasses) {
+    if (!autoEnabled) {
+        _autoActive = NO;
+        return;
+    }
+    if (_cur != &_main) return;
+    if (_main.gen != GenNone) {
+        _autoActive = YES;
+    } else if (!_main.normals_ready || _main.ambo_pass < _amboTarget) {
         // Pick up where the picture left off.
         _autoActive = YES;
-        _main.next = !_main.normals_ready ? (_main.geom_passes >= kAutoGeomPasses ? GenNormals : GenGeom) : GenAmbo;
+        _main.next = !_main.normals_ready ? (_main.geom_passes >= _autoGeomPasses ? GenNormals : GenGeom) : GenAmbo;
     }
+}
+
+- (void)setPaused:(BOOL)paused {
+    _paused = paused;
+    _displayDirty = YES;
+}
+
+// Adds another round of ambient occlusion passes to a finished picture, for smoother shading.
+- (void)refineMore {
+    if (!_main.normals_ready) {
+        self.autoEnabled = YES;
+        return;
+    }
+    _cur = &_main;
+    _amboTarget = MIN(_main.ambo_pass + _autoAmboPasses, kMaxAmboPasses);
+    if (_main.ambo_pass >= _amboTarget) return;
+    _autoActive = YES;
+    _main.next = GenAmbo;
 }
 
 #pragma mark - Mouse
@@ -595,6 +652,25 @@ struct IntersectionSet {
 - (GenMode)stage { return _cur->gen; }
 - (BOOL)onReflection { return _cur == &_refl; }
 - (BOOL)autoRunning { return _autoActive; }
+- (BOOL)finished { return !_autoActive && _cur->gen == GenNone && _cur->next == GenNone; }
+
+// How far through the automatic plan the picture is (0..1), or -1 when the
+// stages are being run by hand.
+- (double)progress {
+    if (!_autoActive) return self.finished ? 1.0 : -1.0;
+    const double tilesTotal = [self tilesAcross] * [self tilesDown];
+    const BOOL refl = [self wantsReflections] || _cur == &_refl;
+    const double mainPlan = _autoGeomPasses + 1 + _amboTarget;
+    const double reflPlan = refl ? _autoGeomPasses + 1 + _autoAmboPasses : 0;
+    auto done = [&](IntersectionSet &s, int amboTarget) {
+        int completedAmbo = MAX(0, s.ambo_pass - ((s.gen == GenAmbo && s.tile > 0) ? 1 : 0));
+        double d = MIN(s.geom_passes, _autoGeomPasses) + (s.normals_ready ? 1 : 0) + MIN(completedAmbo, amboTarget);
+        if (&s == _cur && s.gen != GenNone) d += s.tile / tilesTotal;
+        return d;
+    };
+    double d = (_cur == &_refl) ? mainPlan + done(_refl, _autoAmboPasses) : done(_main, _amboTarget);
+    return MIN(1.0, MAX(0.0, d / (mainPlan + reflPlan)));
+}
 - (int)geomPasses { return _cur->geom_passes; }
 // Completed passes (the one in progress doesn't count).
 - (int)amboPasses { return MAX(0, _cur->ambo_pass - ((_cur->gen == GenAmbo && _cur->tile > 0) ? 1 : 0)); }
@@ -690,21 +766,33 @@ struct IntersectionSet {
     }
 }
 
+// Decides the next stage when the stages are running automatically.
 - (void)applyAuto {
-    if (!_autoActive || _cur != &_main) return;
+    if (!_autoActive) return;
     IntersectionSet *s = _cur;
     if (s->gen == GenGeom) {
-        s->next = (s->geom_passes >= kAutoGeomPasses) ? GenNormals : GenGeom;
+        s->next = (s->geom_passes >= _autoGeomPasses) ? GenNormals : GenGeom;
     } else if (s->gen == GenNormals) {
         s->next = GenAmbo;
     } else if (s->gen == GenAmbo) {
-        if (s->ambo_pass >= kAutoAmboPasses) {
-            s->next = GenNone;
-            _autoActive = NO;   // finished
-        } else {
-            s->next = GenAmbo;
-        }
+        const int target = (s == &_main) ? _amboTarget : _autoAmboPasses;
+        s->next = (s->ambo_pass >= target) ? GenNone : GenAmbo;
     }
+}
+
+// Called when the automatic run has finished all three stages for one set of rays.
+- (void)autoSetFinished {
+    if (_cur == &_main) {
+        _autoFinishedMain = YES;
+        if ([self wantsReflections] && ![self reflectionsComplete]) {
+            [self autoBeginReflections];   // carry on with the reflected rays
+            return;
+        }
+    } else {
+        _cur = &_main;
+    }
+    _autoActive = NO;   // the picture is finished
+    _relightWhole = YES;
 }
 
 - (void)endOfPass {
@@ -716,6 +804,7 @@ struct IntersectionSet {
     if (s->gen == GenAmbo && s->next == GenAmbo && s->ambo_pass >= kMaxAmboPasses) s->next = GenNone;
     [self applyAuto];
     [self enterNextStage];
+    if (_autoActive && s->gen == GenNone) [self autoSetFinished];
 }
 
 // Binds everything the scene shaders read.  A texture can't be read while it
@@ -754,6 +843,10 @@ struct IntersectionSet {
 // Does one frame's worth of work: up to 'maxTiles' tiles of the current
 // stage, then relights whatever changed.  Returns the number of tiles drawn.
 - (int)stepInto:(id<MTLCommandBuffer>)cb maxTiles:(int)maxTiles {
+    return [self stepInto:cb maxTiles:maxTiles honourPause:YES];
+}
+
+- (int)stepInto:(id<MTLCommandBuffer>)cb maxTiles:(int)maxTiles honourPause:(BOOL)honourPause {
     if (!_pipelines || !_main.initialized) return 0;
 
     if (_cur->gen == GenNone && _cur->next != GenNone) [self enterNextStage];
@@ -761,7 +854,8 @@ struct IntersectionSet {
 
     IntersectionSet *s = _cur;
     const int tilesTotal = [self tilesAcross] * [self tilesDown];
-    const int n = (s->gen == GenNone || maxTiles <= 0) ? 0 : MIN(maxTiles, tilesTotal - s->tile);
+    const BOOL hold = honourPause && _paused;
+    const int n = (s->gen == GenNone || maxTiles <= 0 || hold) ? 0 : MIN(maxTiles, tilesTotal - s->tile);
     if (n == 0 && !_relightWhole) return 0;
 
     if (n > 0 && s->gen == GenAmbo && s->tile == 0) s->ambo_pass++;
@@ -852,7 +946,8 @@ struct IntersectionSet {
 }
 
 - (BOOL)hasPendingWork {
-    return _relightWhole || _cur->gen != GenNone || _cur->next != GenNone || _main.clear_flags || _refl.clear_flags;
+    if (_relightWhole || _main.clear_flags || _refl.clear_flags) return YES;
+    return !_paused && (_cur->gen != GenNone || _cur->next != GenNone);
 }
 
 - (void)drawInMTKView:(MTKView *)view {
@@ -909,10 +1004,15 @@ struct IntersectionSet {
     const int tilesTotal = [self tilesAcross] * [self tilesDown];
     for (int i = 0; i < passes; i++) {
         id<MTLCommandBuffer> cb = [_queue commandBuffer];
-        [self stepInto:cb maxTiles:tilesTotal];
+        [self stepInto:cb maxTiles:tilesTotal honourPause:NO];
         [cb commit];
         [cb waitUntilCompleted];
     }
+}
+
+- (BOOL)runUntilFinished:(int)maxPasses {
+    for (int i = 0; i < maxPasses && !self.finished; i++) [self runPasses:1];
+    return self.finished;
 }
 
 - (void)readPixelX:(int)x y:(int)y depth:(float *)depth normal:(simd_float4 *)normal ambo:(simd_float4 *)ambo {

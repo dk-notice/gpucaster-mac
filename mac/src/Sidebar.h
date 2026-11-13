@@ -12,6 +12,14 @@
 // the lighting (random lighting, opening a scene, dragging a light).
 - (void)refresh;
 
+// Called just before a control changes the scene, so the app can record an
+// undo step.  'name' identifies the control (nil for one-off actions), so that
+// one drag of a slider becomes one step.
+@property (nonatomic, copy) void (^willChange)(NSString *name);
+
+// Called after "Randomize all lighting".
+@property (nonatomic, copy) void (^didRandomizeLighting)(void);
+
 // Which light the "Light" section edits (0-based).
 @property (nonatomic) int selectedLight;
 
